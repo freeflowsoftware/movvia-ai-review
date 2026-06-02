@@ -95,7 +95,9 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
     diff,
     ticket,
   });
-  const model = process.env.AGENT_MODEL || 'gemini/gemini-flash-lite';
+  // AGENT_MODEL vem do frontmatter do agente (matrix.model). Vazio = default do CI,
+  // configuravel por DEFAULT_MODEL, batendo com o provider/model do opencode.json.
+  const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'llm/google/gemini-2.5-flash-lite';
   const res = await runAgent(spec, prompt, model, realOpencodeRunner);
   process.stdout.write(JSON.stringify(res));
 }

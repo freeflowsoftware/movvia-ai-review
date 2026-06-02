@@ -150,7 +150,8 @@ describe('opencode.json configura um provider OpenAI-compatible para o LLM', () 
   ) as OpencodeConfig;
 
   it('define o model default e o provider que o resolve', () => {
-    expect(cfg.model).toBe('gemini/gemini-flash-lite');
+    // Default do piloto: Gemini 2.5 Flash-Lite via OpenRouter (provider OpenAI-compat).
+    expect(cfg.model).toBe('llm/google/gemini-2.5-flash-lite');
     const providerId = cfg.model!.split('/')[0]!;
     const provider = cfg.provider?.[providerId];
     expect(provider).toBeDefined();
@@ -165,7 +166,11 @@ describe('opencode.json configura um provider OpenAI-compatible para o LLM', () 
   });
 
   it('declara o model referenciado por provider/model', () => {
-    const [providerId, modelId] = cfg.model!.split('/') as [string, string];
+    // O model id do OpenRouter contem '/' (ex: google/gemini-2.5-flash-lite), entao
+    // o providerId e o 1o segmento e o modelId e o RESTO apos o 1o '/'.
+    const segments = cfg.model!.split('/');
+    const providerId = segments[0]!;
+    const modelId = segments.slice(1).join('/');
     expect(cfg.provider![providerId]!.models).toHaveProperty(modelId);
   });
 });
