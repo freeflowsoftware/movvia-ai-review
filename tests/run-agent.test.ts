@@ -34,6 +34,18 @@ describe('parseFindings', () => {
     expect(out[0]!.startLine).toBe(4);
     expect(out[0]!.endLine).toBe(5);
   });
+  // Regressao: o modelo as vezes mostra o codigo ofensor num bloco ```ts ANTES do ```json.
+  // A cerca ```ts nao parseia para findings[]; precisamos escolher a cerca json, nao a primeira.
+  it('ignora bloco ```ts e usa o ```json seguinte com findings', () => {
+    const raw =
+      'O trecho problematico:\n' +
+      '```ts\nconst x: any = foo();\n```\n' +
+      'Achados:\n' +
+      '```json\n{"findings":[{"file":"a.ts","startLine":1,"endLine":1,"severity":"P1","category":"x","title":"t","rationale":"r","suggestion":"s","cite":"a.ts:1"}]}\n```';
+    const out = parseFindings(raw, 'seguranca');
+    expect(out).toHaveLength(1);
+    expect(out[0]!.file).toBe('a.ts');
+  });
 });
 
 describe('runAgent', () => {
