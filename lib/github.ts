@@ -75,6 +75,55 @@ export async function approveBestEffort(
   }
 }
 
+/** Um comentario inline ancorado em path + linha do diff (corpo ja montado). */
+export interface ReviewInlineComment {
+  path: string;
+  line: number;
+  body: string;
+}
+
+/** Subconjunto do Octokit que postReview consome (permite fake nomeado nos testes). */
+export interface ReviewPoster {
+  pulls: {
+    createReview(params: {
+      owner: string;
+      repo: string;
+      pull_number: number;
+      commit_id: string;
+      event: ReviewEvent;
+      body: string;
+      comments: ReviewInlineComment[];
+    }): Promise<unknown>;
+  };
+}
+
+/**
+ * Borda externa: posta UMA review formal carregando o resumo (body) + os
+ * comentarios inline ancorados na linha. Diferencial do prototipo /revisar-pr.
+ *
+ * Um unico createReview agrupa todos os inline numa thread de review (em vez de N
+ * createReviewComment soltos), e o `event` (APPROVE/REQUEST_CHANGES) carrega o
+ * veredicto junto. commit_id fixa as ancoras no SHA exato revisado.
+ */
+export async function postReview(
+  poster: ReviewPoster,
+  t: PostTarget,
+  sha: string,
+  event: ReviewEvent,
+  summaryBody: string,
+  inlineComments: ReviewInlineComment[],
+): Promise<void> {
+  await poster.pulls.createReview({
+    owner: t.owner,
+    repo: t.repo,
+    pull_number: t.prNumber,
+    commit_id: sha,
+    event,
+    body: summaryBody,
+    comments: inlineComments,
+  });
+}
+
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */
 export async function emitCheckRun(
   octokit: Octokit,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summaryMarker, parseSummarySha, findingMarker, buildSummary } from '../lib/post.js';
+import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments } from '../lib/post.js';
 import { findingId } from '../lib/gatekeeper.js';
 import type { Finding, Verdict } from '../lib/types.js';
 
@@ -33,6 +33,39 @@ describe('findingMarker', () => {
     const original = findings[0]!;
     const deslocado: Finding = { ...original, startLine: original.startLine + 1, endLine: original.endLine + 1 };
     expect(findingMarker(deslocado)).toBe(findingMarker(original));
+  });
+});
+
+describe('buildInlineComments', () => {
+  it('ancora cada comentario no path do arquivo e em endLine (fim do trecho citado)', () => {
+    // Diferencial do prototipo /revisar-pr: o comentario cai NA linha exata da
+    // ofensa. endLine (nao startLine) porque o GitHub exige que `line` seja a
+    // ultima linha do range RUNNING do diff; ancorar no fim casa a thread com o
+    // trecho inteiro citado em `cite`.
+    const comments = buildInlineComments(findings);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]!.path).toBe('a.ts');
+    expect(comments[0]!.line).toBe(12);
+  });
+
+  it('monta o body com severidade, titulo, rationale, suggestion e o marker de dedup', () => {
+    // O body carrega tudo que o autor humano precisa para agir, e termina com o
+    // findingMarker invisivel — ancora estavel de dedup idempotente entre re-runs.
+    const body = buildInlineComments(findings)[0]!.body;
+    expect(body).toContain('P0');
+    expect(body).toContain('Token hardcoded');
+    expect(body).toContain('r'); // rationale
+    expect(body).toContain('s'); // suggestion
+    expect(body).toContain(findingMarker(findings[0]!));
+  });
+
+  it('produz um comentario por finding preservando a ordem', () => {
+    const segundo: Finding = {
+      ...findings[0]!, file: 'b.ts', startLine: 30, endLine: 31, title: 'Outro', category: 'perf',
+    };
+    const comments = buildInlineComments([findings[0]!, segundo]);
+    expect(comments.map((c) => c.path)).toEqual(['a.ts', 'b.ts']);
+    expect(comments.map((c) => c.line)).toEqual([12, 31]);
   });
 });
 

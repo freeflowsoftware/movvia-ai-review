@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOctokitAuth, approveBestEffort, type GithubCredentials, type ReviewClient, type ReviewEvent } from '../lib/github.js';
+import { resolveOctokitAuth, approveBestEffort, postReview, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment } from '../lib/github.js';
 
 // resolveOctokitAuth e logica pura de SELECAO de auth (qual credencial usar), sem
 // tocar a rede. A montagem do Octokit (I/O / borda externa) fica em createOctokit,
@@ -43,6 +43,39 @@ class FakeReviewClient implements ReviewClient {
     },
   };
 }
+
+// Fake nomeado da borda externa (pulls.createReview com inline comments): captura
+// os parametros para asserir que postReview agrupa resumo + inline numa unica review.
+class FakeReviewPoster implements ReviewPoster {
+  public ultimaChamada?: {
+    commit_id: string;
+    event: ReviewEvent;
+    body: string;
+    comments: ReviewInlineComment[];
+  };
+  pulls = {
+    createReview: async (params: {
+      commit_id: string;
+      event: ReviewEvent;
+      body: string;
+      comments: ReviewInlineComment[];
+    }): Promise<void> => {
+      this.ultimaChamada = params;
+    },
+  };
+}
+
+describe('postReview', () => {
+  it('agrupa resumo (body) + inline comments numa unica review ancorada no sha', async () => {
+    const fake = new FakeReviewPoster();
+    const inline: ReviewInlineComment[] = [{ path: 'a.ts', line: 12, body: 'corpo' }];
+    await postReview(fake, { owner: 'o', repo: 'r', prNumber: 7 }, 'abc1234', 'REQUEST_CHANGES', 'resumo', inline);
+    expect(fake.ultimaChamada?.commit_id).toBe('abc1234');
+    expect(fake.ultimaChamada?.event).toBe('REQUEST_CHANGES');
+    expect(fake.ultimaChamada?.body).toBe('resumo');
+    expect(fake.ultimaChamada?.comments).toEqual(inline);
+  });
+});
 
 describe('approveBestEffort', () => {
   it('encaminha o event do veredicto para createReview', async () => {

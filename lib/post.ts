@@ -22,6 +22,38 @@ export function findingMarker(f: Finding): string {
   return `<!-- movvia-ai-review:${f.agent}:${findingId(f)} -->`;
 }
 
+/** Comentario inline pronto para pulls.createReview (path + linha + corpo). */
+export interface InlineComment {
+  path: string;
+  line: number;
+  body: string;
+}
+
+function buildInlineBody(f: Finding): string {
+  // Carrega tudo que o autor humano precisa para agir e termina com o marker
+  // invisivel — ancora estavel de dedup idempotente entre re-runs (findingMarker).
+  return [
+    `**${f.severity}** — ${f.title}`,
+    '',
+    f.rationale,
+    '',
+    `**Sugestao:** ${f.suggestion}`,
+    '',
+    findingMarker(f),
+  ].join('\n');
+}
+
+/**
+ * Diferencial do prototipo /revisar-pr: comentario NA linha exata da ofensa.
+ *
+ * line = endLine (nao startLine) porque o GitHub exige que a linha ancore na
+ * ultima linha do trecho dentro do diff; usar o fim casa a thread com o range
+ * inteiro citado em `cite`. Funcao PURA: o post real fica em postReview (borda).
+ */
+export function buildInlineComments(findings: Finding[]): InlineComment[] {
+  return findings.map((f) => ({ path: f.file, line: f.endLine, body: buildInlineBody(f) }));
+}
+
 export function buildSummary(findings: Finding[], verdict: Verdict, sha: string): string {
   const { P0, P1, P2 } = verdict.counts;
   const titulo = verdict.event === 'REQUEST_CHANGES' ? '🔴 Mudancas necessarias' : '🟢 Aprovado';
@@ -41,10 +73,24 @@ export function buildSummary(findings: Finding[], verdict: Verdict, sha: string)
   ].join('\n');
 }
 
-// --- CLI: post.ts <verdictPath> → posta resumo + check run ---
+/**
+ * Idempotencia do resumo: reusa o comentario top-level ja existente em vez de
+ * acumular um novo a cada re-run. Lista os comentarios do PR e devolve o id do
+ * primeiro que carrega o summaryMarker (marker invisivel cravado por buildSummary).
+ */
+async function findExistingSummaryId(
+  octokit: { issues: { listComments(p: { owner: string; repo: string; issue_number: number }): Promise<{ data: Array<{ id: number; body?: string }> }> } },
+  t: { owner: string; repo: string; prNumber: number },
+): Promise<number | null> {
+  const { data } = await octokit.issues.listComments({ owner: t.owner, repo: t.repo, issue_number: t.prNumber });
+  const previo = data.find((c) => c.body?.includes('<!-- movvia-ai-review:summary'));
+  return previo?.id ?? null;
+}
+
+// --- CLI: post.ts <verdictPath> → posta resumo (idempotente) + inline + check run ---
 if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
-  const { createOctokit, emitCheckRun, approveBestEffort } = await import('./github.js');
+  const { createOctokit, emitCheckRun, approveBestEffort, postReview } = await import('./github.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
   const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
@@ -61,12 +107,24 @@ if (process.argv[1]?.endsWith('post.ts')) {
   const sha = pr.data.head.sha;
   const summary = buildSummary(findings, verdict, sha);
   await emitCheckRun(octokit, { owner, repo, prNumber }, sha, verdict.conclusion, summary);
-  await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body: summary });
+  // Idempotencia: re-run num mesmo PR atualiza o resumo existente em vez de empilhar
+  // um novo a cada commit. Ancora no summaryMarker ja embutido por buildSummary.
+  const existingId = await findExistingSummaryId(octokit, { owner, repo, prNumber });
+  if (existingId !== null) {
+    await octokit.issues.updateComment({ owner, repo, comment_id: existingId, body: summary });
+  } else {
+    await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body: summary });
+  }
+  // Diferencial do prototipo /revisar-pr: comentarios INLINE na linha exata. Postados
+  // junto do veredicto numa unica review (resumo no body) ancorada no sha revisado.
+  // TODO pos-piloto: dedup inline via findingMarker + resolveReviewThread.
+  const inlineComments = buildInlineComments(findings);
+  await postReview(octokit, { owner, repo, prNumber }, sha, verdict.event, summary, inlineComments);
   // O check run (via App) e quem trava o merge; o review formal via PAT do Pablo e
   // best-effort (o App nao pode aprovar o proprio PR de teste -> 422 ignorado).
   if (process.env.REVIEW_PAT) {
     const pat = createOctokit({ pat: process.env.REVIEW_PAT });
     await approveBestEffort(pat, { owner, repo, prNumber }, verdict.event);
   }
-  console.log(`Posted: ${verdict.event} (${findings.length} findings)`);
+  console.log(`Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} inline)`);
 }
