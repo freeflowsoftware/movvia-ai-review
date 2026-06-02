@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { detectLanguages, buildPrompt } from '../lib/context-loader.js';
+import {
+  detectLanguages,
+  buildPrompt,
+  buildSystemPrompt,
+  buildUserPrompt,
+} from '../lib/context-loader.js';
 import type { AgentSpec } from '../lib/types.js';
 
 const SPEC: AgentSpec = {
@@ -60,5 +65,54 @@ describe('buildPrompt', () => {
       spec: SPEC, repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;',
     });
     expect(p).not.toContain('## US do Jira');
+  });
+});
+
+// O harness passou a chamar chat-completion direto: a persona vira SYSTEM (para focar o
+// agente na sua dimensao) e o contexto do PR vira USER. Estes testes travam o split.
+describe('buildSystemPrompt', () => {
+  it('contem a persona, a calibracao de severidade e as instrucoes obrigatorias (schema camelCase)', () => {
+    const s = buildSystemPrompt(SPEC);
+    expect(s).toContain('revisor de PERFORMANCE');     // persona
+    expect(s).toContain('## Calibracao de severidade');
+    expect(s).toContain('N+1 query');                  // severityHints
+    expect(s).toContain('PT-BR');                      // instrucao de idioma
+    expect(s).toContain('[arquivo:linha');             // exigencia de cite-the-line
+    expect(s).toContain('startLine');                  // schema explicito (camelCase canonico)
+    expect(s).toContain('camelCase');
+  });
+
+  it('NAO contem o diff nem as regras do repo (isso e do user prompt)', () => {
+    const s = buildSystemPrompt(SPEC);
+    expect(s).not.toContain('## DIFF DO PR');
+    expect(s).not.toContain('## Regras do repositorio alvo');
+  });
+});
+
+describe('buildUserPrompt', () => {
+  it('contem regras do repo, lang-packs, ADRs, US do Jira e o diff', () => {
+    const u = buildUserPrompt({
+      repoRules: 'REGRA: usar lock distribuido',
+      langPacks: ['JS: map().filter() = 2 passagens eager'],
+      adrs: 'ADR-001: hexagonal',
+      diff: '+const x = 1;',
+      ticket: { summary: 'Debitar saldo no pedagio', description: 'AC1: travar conta antes do debito' },
+    });
+    expect(u).toContain('REGRA: usar lock distribuido');
+    expect(u).toContain('2 passagens eager');
+    expect(u).toContain('ADR-001');
+    expect(u).toContain('## US do Jira');
+    expect(u).toContain('Debitar saldo no pedagio');
+    expect(u).toContain('+const x = 1;');
+  });
+
+  it('omite a secao "## US do Jira" quando nao ha ticket', () => {
+    const u = buildUserPrompt({ repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;' });
+    expect(u).not.toContain('## US do Jira');
+  });
+
+  it('NAO contem a persona (isso e do system prompt)', () => {
+    const u = buildUserPrompt({ repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;' });
+    expect(u).not.toContain('revisor de PERFORMANCE');
   });
 });

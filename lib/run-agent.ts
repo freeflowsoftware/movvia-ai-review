@@ -1,8 +1,5 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { AgentResult, Finding, AgentSpec, Severity } from './types.js';
 
-const execFileP = promisify(execFile);
 const SEVERITIES: Severity[] = ['P0', 'P1', 'P2'];
 
 /** Recorta o objeto `{...}` mais externo de um trecho, ou null se nao houver chaves. */
@@ -91,38 +88,60 @@ export function parseFindings(raw: string, agent: string): Finding[] {
     }));
 }
 
-/** Borda externa (DIP): invoca o opencode. Testes injetam um fake. */
-export type OpencodeRunner = (model: string, prompt: string) => Promise<string>;
+/**
+ * Borda externa (DIP): faz a chat-completion direta. Testes injetam um fake.
+ * Trocamos o "opencode run" (agente completo que diluia a persona da dimensao) por uma
+ * chamada chat-completion direta com a persona como SYSTEM — cada agente foca na sua
+ * dimensao. system e user vem separados (buildSystemPrompt/buildUserPrompt).
+ */
+export type ChatRunner = (model: string, system: string, user: string) => Promise<string>;
 
-export const realOpencodeRunner: OpencodeRunner = async (model, prompt) => {
-  // O `input` do execFileSync NAO existe no execFile async: a opcao e ignorada e o
-  // filho fica bloqueado esperando stdin que nunca chega (verificado no Node v22.17.0).
-  // promisify(execFile) expoe o ChildProcess em `.child`; escrevemos o prompt no stdin
-  // do filho manualmente. Prompt e grande (regras + lang-packs + diff), entao stdin > argv.
-  //
-  // FIX P0: herdamos process.env explicitamente. O opencode resolve a credencial do
-  // provider via interpolacao {env:LLM_API_KEY}/{env:LLM_BASE_URL} no opencode.json
-  // (provider OpenAI-compatible). Sem o env herdado, o filho nao ve LLM_API_KEY e a
-  // chamada ao LLM falha por falta de credencial — exatamente o bug que esta corrige.
-  const running = execFileP('opencode', ['run', '-m', model], {
-    encoding: 'utf8',
-    maxBuffer: 20 * 1024 * 1024,
-    env: process.env,
+/**
+ * O endpoint OpenRouter quer o id PURO do modelo (ex: 'google/gemini-2.5-flash-lite').
+ * O prefixo 'llm/' so existia para o provider customizado do opencode.json; na chat
+ * direta ele quebra o roteamento, entao removemos quando vier (compat com configs antigas).
+ */
+function stripOpencodeProviderPrefix(model: string): string {
+  return model.startsWith('llm/') ? model.slice('llm/'.length) : model;
+}
+
+interface ChatCompletionResponse {
+  choices?: { message?: { content?: string } }[];
+}
+
+export const realChatRunner: ChatRunner = async (model, system, user) => {
+  // fetch nativo do Node 22; nao dependemos mais do binario opencode no PATH.
+  const res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.LLM_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: stripOpencodeProviderPrefix(model),
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
+      temperature: 0.1,
+    }),
   });
-  const stdin = running.child.stdin;
-  if (!stdin) throw new Error('opencode nao expos stdin; esperado um stream gravavel');
-  stdin.write(prompt);
-  stdin.end();
-  const { stdout } = await running;
-  return stdout;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`chat-completion falhou: HTTP ${res.status} — ${body}`);
+  }
+  const data = (await res.json()) as ChatCompletionResponse;
+  return data.choices?.[0]?.message?.content ?? '';
 };
 
 export async function runAgent(
   spec: AgentSpec,
-  prompt: string,
+  system: string,
+  user: string,
   model: string,
-  runner: OpencodeRunner,
+  runner: ChatRunner,
 ): Promise<AgentResult> {
-  const raw = await runner(model, prompt);
+  const raw = await runner(model, system, user);
   return { agent: spec.name, findings: parseFindings(raw, spec.name) };
 }

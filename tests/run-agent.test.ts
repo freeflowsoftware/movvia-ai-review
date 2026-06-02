@@ -1,6 +1,6 @@
 // tests/run-agent.test.ts
 import { describe, it, expect } from 'vitest';
-import { parseFindings, runAgent, type OpencodeRunner } from '../lib/run-agent.js';
+import { parseFindings, runAgent, type ChatRunner } from '../lib/run-agent.js';
 import type { AgentSpec } from '../lib/types.js';
 
 const SPEC: AgentSpec = {
@@ -49,11 +49,16 @@ describe('parseFindings', () => {
 });
 
 describe('runAgent', () => {
-  it('usa o runner injetado e carimba o nome do agente', async () => {
-    const fakeRunner: OpencodeRunner = async () =>
-      '{"findings":[{"file":"a.ts","startLine":3,"endLine":3,"severity":"P1","category":"x","title":"t","rationale":"r","suggestion":"s","cite":"a.ts:3"}]}';
-    const res = await runAgent(SPEC, 'prompt', 'gemini/flash-lite', fakeRunner);
+  it('usa o runner injetado (model,system,user) e carimba o nome do agente', async () => {
+    const seen: { model: string; system: string; user: string }[] = [];
+    const fakeRunner: ChatRunner = async (model, system, user) => {
+      seen.push({ model, system, user });
+      return '{"findings":[{"file":"a.ts","startLine":3,"endLine":3,"severity":"P1","category":"x","title":"t","rationale":"r","suggestion":"s","cite":"a.ts:3"}]}';
+    };
+    const res = await runAgent(SPEC, 'sou o system', 'sou o user', 'gemini/flash-lite', fakeRunner);
     expect(res.agent).toBe('seguranca');
     expect(res.findings[0]!.agent).toBe('seguranca');
+    // O runner recebe os tres argumentos na ordem (model, system, user).
+    expect(seen[0]).toEqual({ model: 'gemini/flash-lite', system: 'sou o system', user: 'sou o user' });
   });
 });

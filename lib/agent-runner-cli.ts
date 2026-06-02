@@ -2,8 +2,8 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
-import { detectLanguages, buildPrompt } from './context-loader.js';
-import { runAgent, realOpencodeRunner } from './run-agent.js';
+import { detectLanguages, buildSystemPrompt, buildUserPrompt } from './context-loader.js';
+import { runAgent, realChatRunner } from './run-agent.js';
 import { ADR_GLOBS } from './adr.js';
 import {
   extractJiraKey,
@@ -87,8 +87,10 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // matchAll devolve grupos string|undefined; o regex casa => m[1] sempre presente.
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? '');
   const ticket = await loadJiraTicket(process.env);
-  const prompt = buildPrompt({
-    spec,
+  // Split system/user: a persona da dimensao vira SYSTEM (foca o agente), o contexto do
+  // PR vira USER. Antes era um prompt unico passado ao opencode run.
+  const system = buildSystemPrompt(spec);
+  const user = buildUserPrompt({
     repoRules: loadRepoRules(repoDir),
     langPacks: loadLangPacks(changedFiles, central),
     adrs: loadAdrs(repoDir),
@@ -96,8 +98,9 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
     ticket,
   });
   // AGENT_MODEL vem do frontmatter do agente (matrix.model). Vazio = default do CI,
-  // configuravel por DEFAULT_MODEL, batendo com o provider/model do opencode.json.
-  const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'llm/google/gemini-2.5-flash-lite';
-  const res = await runAgent(spec, prompt, model, realOpencodeRunner);
+  // configuravel por DEFAULT_MODEL. Id PURO do OpenRouter (sem prefixo 'llm/' do opencode):
+  // a chat-completion direta roteia pelo id do modelo, nao pelo provider customizado.
+  const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'google/gemini-2.5-flash-lite';
+  const res = await runAgent(spec, system, user, model, realChatRunner);
   process.stdout.write(JSON.stringify(res));
 }
