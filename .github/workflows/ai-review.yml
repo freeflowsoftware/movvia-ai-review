@@ -149,8 +149,9 @@ jobs:
           REVIEW_PAT: ${{ secrets.REVIEW_PAT }}
           # Fallback de identidade quando nao ha App/PAT: o token nativo do Actions
           # posta comentario/inline/check run (review vira COMMENT). permissions ja
-          # concedem pull-requests:write + checks:write.
-          GITHUB_TOKEN: ${{ github.token }}
+          # concedem pull-requests:write + checks:write. NB: o prefixo GITHUB_ e
+          # reservado pelo runner (env GITHUB_TOKEN e ignorada) -> usar GH_TOKEN.
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}
         run: npx tsx lib/post.ts /tmp/verdict.json

@@ -114,7 +114,7 @@ if (process.argv[1]?.endsWith('post.ts')) {
     appId: process.env.REVIEW_APP_ID,
     privateKey: process.env.REVIEW_APP_PRIVATE_KEY,
     installationId: process.env.REVIEW_INSTALLATION_ID,
-    pat: process.env.REVIEW_PAT ?? process.env.GITHUB_TOKEN,
+    pat: process.env.REVIEW_PAT ?? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
   });
   // Identidade forte = App ou PAT humano (conta para branch protection). Só GITHUB_TOKEN
   // não conta, então o review vira COMMENT e o veredicto real fica no check run.
