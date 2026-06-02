@@ -44,7 +44,7 @@ export function buildSummary(findings: Finding[], verdict: Verdict, sha: string)
 // --- CLI: post.ts <verdictPath> → posta resumo + check run ---
 if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
-  const { createOctokit, emitCheckRun } = await import('./github.js');
+  const { createOctokit, emitCheckRun, approveBestEffort } = await import('./github.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
   const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
@@ -62,5 +62,11 @@ if (process.argv[1]?.endsWith('post.ts')) {
   const summary = buildSummary(findings, verdict, sha);
   await emitCheckRun(octokit, { owner, repo, prNumber }, sha, verdict.conclusion, summary);
   await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body: summary });
+  // O check run (via App) e quem trava o merge; o review formal via PAT do Pablo e
+  // best-effort (o App nao pode aprovar o proprio PR de teste -> 422 ignorado).
+  if (process.env.REVIEW_PAT) {
+    const pat = createOctokit({ pat: process.env.REVIEW_PAT });
+    await approveBestEffort(pat, { owner, repo, prNumber }, verdict.event);
+  }
   console.log(`Posted: ${verdict.event} (${findings.length} findings)`);
 }

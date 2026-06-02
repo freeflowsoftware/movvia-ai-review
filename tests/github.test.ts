@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOctokitAuth, type GithubCredentials } from '../lib/github.js';
+import { resolveOctokitAuth, approveBestEffort, type GithubCredentials, type ReviewClient, type ReviewEvent } from '../lib/github.js';
 
 // resolveOctokitAuth e logica pura de SELECAO de auth (qual credencial usar), sem
 // tocar a rede. A montagem do Octokit (I/O / borda externa) fica em createOctokit,
@@ -27,5 +27,34 @@ describe('resolveOctokitAuth', () => {
     // Antes o codigo montava `new Octokit({ auth: undefined })` em silencio e so
     // falhava em runtime com 401/403 no primeiro request. Falhar cedo e explicito.
     expect(() => resolveOctokitAuth({})).toThrow(/REVIEW_APP_ID.*REVIEW_PAT|credencial/i);
+  });
+});
+
+// Fake nomeado da borda externa (pulls.createReview): nao toca a rede. O App do
+// bot nao consegue aprovar o proprio PR de teste (422), entao o APPROVE formal sai
+// pelo PAT do Pablo e e best-effort — uma falha 422 em self-PR nao pode derrubar o post.
+class FakeReviewClient implements ReviewClient {
+  public chamadas: Array<{ event: ReviewEvent }> = [];
+  constructor(private readonly erro?: Error) {}
+  pulls = {
+    createReview: async (params: { event: ReviewEvent }): Promise<void> => {
+      if (this.erro) throw this.erro;
+      this.chamadas.push({ event: params.event });
+    },
+  };
+}
+
+describe('approveBestEffort', () => {
+  it('encaminha o event do veredicto para createReview', async () => {
+    const fake = new FakeReviewClient();
+    await approveBestEffort(fake, { owner: 'o', repo: 'r', prNumber: 7 }, 'APPROVE');
+    expect(fake.chamadas).toEqual([{ event: 'APPROVE' }]);
+  });
+
+  it('engole erro do GitHub (ex: 422 em self-PR) sem propagar', async () => {
+    const fake = new FakeReviewClient(new Error('Review cannot be requested by author (422)'));
+    await expect(
+      approveBestEffort(fake, { owner: 'o', repo: 'r', prNumber: 7 }, 'APPROVE'),
+    ).resolves.toBeUndefined();
   });
 });

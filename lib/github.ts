@@ -47,6 +47,34 @@ export function createOctokit(creds: GithubCredentials): Octokit {
   return new Octokit({ auth: auth.token });
 }
 
+/** Evento aceito por pulls.createReview no fluxo de veredicto (subset do union do Octokit). */
+export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES';
+
+/** Subconjunto do Octokit que approveBestEffort consome (permite fake nos testes). */
+export interface ReviewClient {
+  pulls: { createReview(params: { owner: string; repo: string; pull_number: number; event: ReviewEvent }): Promise<unknown> };
+}
+
+/**
+ * Posta o APPROVE/REQUEST_CHANGES formal via PAT — best-effort.
+ *
+ * O check run `review-bot/verdict` (via App) e quem trava o merge no Ruleset; o
+ * review formal e so cortesia na UI. O App nao pode aprovar o proprio PR de teste
+ * (GitHub responde 422 "author"), entao engolimos o erro: uma falha aqui nao pode
+ * derrubar o post que ja emitiu o check run e o comentario.
+ */
+export async function approveBestEffort(
+  client: ReviewClient,
+  t: PostTarget,
+  event: ReviewEvent,
+): Promise<void> {
+  try {
+    await client.pulls.createReview({ owner: t.owner, repo: t.repo, pull_number: t.prNumber, event });
+  } catch (e) {
+    console.log(`Approve via PAT pulado: ${(e as Error).message}`);
+  }
+}
+
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */
 export async function emitCheckRun(
   octokit: Octokit,
