@@ -44,14 +44,19 @@ export function buildSummary(findings: Finding[], verdict: Verdict, sha: string)
 // --- CLI: post.ts <verdictPath> → posta resumo + check run ---
 if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
-  const { Octokit } = await import('@octokit/rest');
-  const { emitCheckRun } = await import('./github.js');
+  const { createOctokit, emitCheckRun } = await import('./github.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
   const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
   const prNumber = Number(process.env.PR_NUMBER);
-  // App auth (Octokit) montado a partir de REVIEW_APP_ID/REVIEW_APP_PRIVATE_KEY.
-  const octokit = new Octokit({ auth: process.env.REVIEW_PAT });
+  // Auth via GitHub App (REVIEW_APP_ID/REVIEW_APP_PRIVATE_KEY/REVIEW_INSTALLATION_ID)
+  // mintando installation token; fallback para REVIEW_PAT. Falha cedo se faltar tudo.
+  const octokit = createOctokit({
+    appId: process.env.REVIEW_APP_ID,
+    privateKey: process.env.REVIEW_APP_PRIVATE_KEY,
+    installationId: process.env.REVIEW_INSTALLATION_ID,
+    pat: process.env.REVIEW_PAT,
+  });
   const pr = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
   const sha = pr.data.head.sha;
   const summary = buildSummary(findings, verdict, sha);

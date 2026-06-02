@@ -1,6 +1,9 @@
 // tests/gatekeeper.test.ts
 import { describe, it, expect } from 'vitest';
-import { findingId, dedupe, decideVerdict, filterByCite, runAdversarial, type Refuter } from '../lib/gatekeeper.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { findingId, dedupe, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, type Refuter } from '../lib/gatekeeper.js';
 import type { Finding } from '../lib/types.js';
 
 function f(over: Partial<Finding>): Finding {
@@ -68,6 +71,21 @@ describe('runAdversarial', () => {
   it('descarta finding com score abaixo do threshold', async () => {
     const refuter: Refuter = async () => ({ refuted: false, score: 3 });
     expect(await runAdversarial([f({})], refuter, 0.8)).toEqual([]);
+  });
+});
+
+describe('readAdversarialThreshold', () => {
+  // defaults.yml prometia que gatekeeper.adversarial_threshold passaria a ser lido
+  // a partir do Task 15; este teste fecha essa promessa (antes era hardcoded).
+  it('le gatekeeper.adversarial_threshold do YAML', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'cfg-')), 'defaults.yml');
+    writeFileSync(path, 'gatekeeper:\n  adversarial_threshold: 0.5\n');
+    expect(readAdversarialThreshold(path)).toBe(0.5);
+  });
+  it('usa fallback 0.8 quando a chave esta ausente', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'cfg-')), 'defaults.yml');
+    writeFileSync(path, 'llm:\n  default_model: x\n');
+    expect(readAdversarialThreshold(path)).toBe(0.8);
   });
 });
 

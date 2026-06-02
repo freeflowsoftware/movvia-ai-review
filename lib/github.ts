@@ -1,6 +1,51 @@
 import { Octokit } from '@octokit/rest';
+import { createAppAuth } from '@octokit/auth-app';
 
 export interface PostTarget { owner: string; repo: string; prNumber: number; }
+
+/** Credenciais cruas vindas das env vars do job `post` do workflow. */
+export interface GithubCredentials {
+  appId?: string;
+  privateKey?: string;
+  installationId?: string;
+  pat?: string;
+}
+
+/** App auth (mintar installation token) tem prioridade; PAT e fallback. */
+export type OctokitAuth =
+  | { kind: 'app'; options: { appId: number; privateKey: string; installationId: number } }
+  | { kind: 'pat'; token: string };
+
+/**
+ * Decide qual credencial usar SEM tocar a rede. O workflow declara REVIEW_APP_ID /
+ * REVIEW_APP_PRIVATE_KEY como required e REVIEW_PAT como optional; logo o caminho
+ * primario e o GitHub App. Falha cedo e explicito quando nada e fornecido — antes
+ * o codigo montava `new Octokit({ auth: undefined })` e so quebrava com 401/403 no
+ * primeiro request (checks:write / pull-requests:write).
+ */
+export function resolveOctokitAuth(creds: GithubCredentials): OctokitAuth {
+  const { appId, privateKey, installationId, pat } = creds;
+  if (appId && privateKey && installationId) {
+    return {
+      kind: 'app',
+      options: { appId: Number(appId), privateKey, installationId: Number(installationId) },
+    };
+  }
+  if (pat) return { kind: 'pat', token: pat };
+  throw new Error(
+    'Credenciais do GitHub ausentes: defina REVIEW_APP_ID + REVIEW_APP_PRIVATE_KEY ' +
+      '(+ REVIEW_INSTALLATION_ID) ou REVIEW_PAT.',
+  );
+}
+
+/** Borda externa: monta o Octokit autenticado a partir das credenciais resolvidas. */
+export function createOctokit(creds: GithubCredentials): Octokit {
+  const auth = resolveOctokitAuth(creds);
+  if (auth.kind === 'app') {
+    return new Octokit({ authStrategy: createAppAuth, auth: auth.options });
+  }
+  return new Octokit({ auth: auth.token });
+}
 
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */
 export async function emitCheckRun(

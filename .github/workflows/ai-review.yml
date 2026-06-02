@@ -10,6 +10,7 @@ on:
       LLM_BASE_URL:           { required: false }
       REVIEW_APP_ID:          { required: true }
       REVIEW_APP_PRIVATE_KEY: { required: true }
+      REVIEW_INSTALLATION_ID: { required: true }
       REVIEW_PAT:             { required: false }
       JIRA_BASE_URL:          { required: false }
       JIRA_EMAIL:             { required: false }
@@ -124,6 +125,7 @@ jobs:
         env:
           REVIEW_APP_ID: ${{ secrets.REVIEW_APP_ID }}
           REVIEW_APP_PRIVATE_KEY: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
+          REVIEW_INSTALLATION_ID: ${{ secrets.REVIEW_INSTALLATION_ID }}
           REVIEW_PAT: ${{ secrets.REVIEW_PAT }}
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}

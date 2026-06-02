@@ -1,7 +1,6 @@
-# ATENCAO: arquivo de forward-reference. Nenhum consumidor le este YAML hoje (Task 14).
-# adversarial_threshold passa a ser lido pelo gatekeeper a partir do Task 15; ate la
-# o threshold continua hardcoded como parametro em runAdversarial. Editar chaves aqui
-# (adversarial_threshold, paths_criticos, etc.) NAO tem efeito antes do Task 15.
+# gatekeeper.adversarial_threshold E lido pelo entrypoint do gatekeeper (Task 15):
+# editar este valor muda quais findings sobrevivem a etapa adversarial. As demais
+# chaves (llm.*, paths_criticos) ainda sao forward-reference — nenhum consumidor as le.
 # Default do CI. base_url/model trocaveis por env/secret e por frontmatter do agente.
 llm:
   default_model: "gemini/gemini-flash-lite"

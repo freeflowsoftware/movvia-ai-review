@@ -1,8 +1,10 @@
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildPrompt } from './context-loader.js';
 import { runAgent, realOpencodeRunner } from './run-agent.js';
+import { ADR_GLOBS } from './adr.js';
 
 export function loadRepoRules(repoDir: string): string {
   const parts: string[] = [];
@@ -25,6 +27,27 @@ export function loadLangPacks(changedFiles: string[], centralDir: string): strin
   });
 }
 
+/**
+ * Carrega o conteudo real dos ADRs do repo alvo, casando os caminhos relativos
+ * contra os ADR_GLOBS compartilhados com o gate de ADR (lib/adr.ts). Antes esta
+ * secao do prompt recebia um placeholder estatico inutil; agora o agente ve as
+ * decisoes arquiteturais ja tomadas. Limita a 50 arquivos para nao estourar o
+ * contexto do modelo em repos com muitos ADRs.
+ */
+const ADR_IGNORE = /(^|\/)(node_modules|\.git|dist|target|build)(\/|$)/;
+
+export function loadAdrs(repoDir: string): string {
+  if (!existsSync(repoDir)) return '';
+  const matches = readdirSync(repoDir, { recursive: true })
+    .map((entry) => String(entry).split('\\').join('/'))
+    .filter((rel) => !ADR_IGNORE.test(rel))
+    .filter((rel) => ADR_GLOBS.some((g) => minimatch(rel, g)))
+    .filter((rel) => statSync(join(repoDir, rel)).isFile())
+    .sort()
+    .slice(0, 50);
+  return matches.map((rel) => readFileSync(join(repoDir, rel), 'utf8')).join('\n\n');
+}
+
 // CLI: agent-runner-cli.ts <agentName> <repoDir> <diffPath>
 if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // Fallback '' nos argv (mesma convencao de jira.ts/adr.ts) para satisfazer
@@ -35,13 +58,11 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   const diff = readFileSync(diffPath, 'utf8');
   // matchAll devolve grupos string|undefined; o regex casa => m[1] sempre presente.
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? '');
-  const adrsPath = join(repoDir, 'docs');
-  const adrs = existsSync(adrsPath) ? '(ADRs disponiveis no repo de docs)' : '';
   const prompt = buildPrompt({
     spec,
     repoRules: loadRepoRules(repoDir),
     langPacks: loadLangPacks(changedFiles, central),
-    adrs,
+    adrs: loadAdrs(repoDir),
     diff,
   });
   const model = process.env.AGENT_MODEL || 'gemini/gemini-flash-lite';
