@@ -13,6 +13,25 @@ function f(over: Partial<Finding>): Finding {
   };
 }
 
+/**
+ * Fake nomeado do refutador (borda externa: simula o LLM/opencode). Lanca para
+ * findings cuja categoria casa com `categoriaQueFalha`, simulando uma rejeicao
+ * transitoria (timeout/spawn/rede); para os demais, refuta com confianca alta.
+ * Uso: new RefuterQueFalhaEm('quebra').asRefuter()
+ */
+class RefuterQueFalhaEm {
+  constructor(private readonly categoriaQueFalha: string) {}
+
+  asRefuter(): Refuter {
+    return async (finding) => {
+      if (finding.category === this.categoriaQueFalha) {
+        throw new Error(`refuter timeout para categoria ${finding.category}`);
+      }
+      return { refuted: false, score: 9 };
+    };
+  }
+}
+
 describe('findingId', () => {
   it('e estavel para mesmo arquivo+range+categoria', () => {
     expect(findingId(f({}))).toBe(findingId(f({ title: 'outro titulo' })));
@@ -71,6 +90,20 @@ describe('runAdversarial', () => {
   it('descarta finding com score abaixo do threshold', async () => {
     const refuter: Refuter = async () => ({ refuted: false, score: 3 });
     expect(await runAdversarial([f({})], refuter, 0.8)).toEqual([]);
+  });
+  // Regressao: o refutador chama o LLM (opencode) por finding. Uma rejeicao
+  // transitoria (timeout/spawn/rede) NAO pode derrubar o batch inteiro nem
+  // esconder os demais findings. Conservador de corretude: o finding cujo
+  // refutador falhou e MANTIDO (refuted=false, score=10) — nunca silenciamos
+  // um possivel bug por falha de infraestrutura.
+  it('falha transitoria de um refuter nao derruba o batch e mantem o finding afetado', async () => {
+    const refuter = new RefuterQueFalhaEm('quebra').asRefuter();
+    const out = await runAdversarial(
+      [f({ category: 'ok' }), f({ category: 'quebra' })],
+      refuter,
+      0.8,
+    );
+    expect(out.map((x) => x.category).sort()).toEqual(['ok', 'quebra']);
   });
 });
 
