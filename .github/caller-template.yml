@@ -1,0 +1,12 @@
+name: AI Review
+on:
+  pull_request: { types: [opened, synchronize, reopened] }
+  issue_comment: { types: [created] }
+jobs:
+  call:
+    if: github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/ai-review')
+    uses: freeflowsoftware/movvia-ai-review/.github/workflows/ai-review.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number || github.event.issue.number }}
+      full_review: ${{ contains(github.event.comment.body, '--full') }}
+    secrets: inherit
