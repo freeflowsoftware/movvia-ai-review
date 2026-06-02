@@ -81,8 +81,11 @@ jobs:
         run: gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
       - name: Rodar agente ${{ matrix.name }}
         env:
+          # O opencode lê o provider OpenAI-compatible de _review/opencode.json (cwd do
+          # passo) e resolve a credencial via {env:LLM_API_KEY}/{env:LLM_BASE_URL}.
+          # LLM_BASE_URL é secret opcional; default = endpoint OpenAI-compat do Gemini.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           AGENT_NAME: ${{ matrix.name }}
           AGENT_MODEL: ${{ matrix.model }}
         run: cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff > "/tmp/findings-${AGENT_NAME}.json"
@@ -97,6 +100,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm i -g pnpm && pnpm install
+      - name: Instalar opencode
+        run: npm i -g opencode-ai || true
       - uses: actions/download-artifact@v4
         with: { path: /tmp/findings, pattern: "findings-*", merge-multiple: true }
       - name: Capturar diff
@@ -105,8 +110,11 @@ jobs:
         run: gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
       - name: Consolidar
         env:
+          # A etapa adversarial do gatekeeper tambem invoca o opencode (runAdversarial →
+          # realOpencodeRunner). opencode.json esta no cwd (raiz do repo central, checkout
+          # acima) e resolve a credencial via {env:LLM_API_KEY}/{env:LLM_BASE_URL}.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
         run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff > /tmp/verdict.json
       - uses: actions/upload-artifact@v4
         with: { name: verdict, path: /tmp/verdict.json }

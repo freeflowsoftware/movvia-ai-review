@@ -65,9 +65,15 @@ export const realOpencodeRunner: OpencodeRunner = async (model, prompt) => {
   // filho fica bloqueado esperando stdin que nunca chega (verificado no Node v22.17.0).
   // promisify(execFile) expoe o ChildProcess em `.child`; escrevemos o prompt no stdin
   // do filho manualmente. Prompt e grande (regras + lang-packs + diff), entao stdin > argv.
+  //
+  // FIX P0: herdamos process.env explicitamente. O opencode resolve a credencial do
+  // provider via interpolacao {env:LLM_API_KEY}/{env:LLM_BASE_URL} no opencode.json
+  // (provider OpenAI-compatible). Sem o env herdado, o filho nao ve LLM_API_KEY e a
+  // chamada ao LLM falha por falta de credencial — exatamente o bug que esta corrige.
   const running = execFileP('opencode', ['run', '-m', model], {
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
+    env: process.env,
   });
   const stdin = running.child.stdin;
   if (!stdin) throw new Error('opencode nao expos stdin; esperado um stream gravavel');

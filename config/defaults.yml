@@ -1,7 +1,11 @@
 # gatekeeper.adversarial_threshold E lido pelo entrypoint do gatekeeper (Task 15):
-# editar este valor muda quais findings sobrevivem a etapa adversarial. As demais
-# chaves (llm.*, paths_criticos) ainda sao forward-reference — nenhum consumidor as le.
-# Default do CI. base_url/model trocaveis por env/secret e por frontmatter do agente.
+# editar este valor muda quais findings sobrevivem a etapa adversarial.
+#
+# llm.*: o opencode (runner real dos agentes e da etapa adversarial) le o provider
+# OpenAI-compatible de opencode.json na raiz do repo, que interpola {env:LLM_API_KEY}
+# e {env:LLM_BASE_URL}. O model default (gemini/gemini-flash-lite) casa o provider id
+# "gemini" definido la. paths_criticos segue como forward-reference (sem consumidor).
+# base_url/model trocaveis por env/secret e por frontmatter do agente.
 llm:
   default_model: "gemini/gemini-flash-lite"
   base_url_env: LLM_BASE_URL
