@@ -79,6 +79,41 @@ describe('credencial do LLM chega ao opencode em runtime', () => {
   });
 });
 
+// FIX P0-seguranca: o caller usa `secrets: inherit`, entao o branch issue_comment do
+// `if:` PRECISA exigir que o comentario seja em um PR e que o autor seja membro do repo,
+// senao qualquer pessoa que abra um PR de fork dispara o pipeline com todos os org secrets.
+// Estes asserts travam o guard de fork (author_association + github.event.issue.pull_request).
+describe('caller-template tem guard de fork no gatilho issue_comment', () => {
+  const callerSrc = readFileSync(
+    resolve(repoRoot, '.github/caller-template.yml'),
+    'utf8',
+  );
+  const caller = YAML.parse(callerSrc) as {
+    jobs?: Record<string, { if?: string }>;
+  };
+
+  it('o YAML do caller continua valido em YAML 1.2', () => {
+    expect(() => YAML.parse(callerSrc)).not.toThrow();
+  });
+
+  it('o `if:` do job exige autor membro (author_association)', () => {
+    const condition = caller.jobs?.call?.if ?? '';
+    expect(condition).toContain('github.event.comment.author_association');
+    expect(condition).toContain('"OWNER","MEMBER","COLLABORATOR"');
+    expect(condition).toContain('fromJson');
+  });
+
+  it('o `if:` do job exige que o comentario seja em um PR (issue.pull_request)', () => {
+    const condition = caller.jobs?.call?.if ?? '';
+    expect(condition).toContain('github.event.issue.pull_request');
+  });
+
+  it('mantem o branch pull_request normal', () => {
+    const condition = caller.jobs?.call?.if ?? '';
+    expect(condition).toContain("github.event_name == 'pull_request'");
+  });
+});
+
 describe('opencode.json configura um provider OpenAI-compatible para o LLM', () => {
   interface OpencodeProvider {
     npm?: string;
