@@ -1,5 +1,0 @@
-# pnpm 10+ leu settings deste arquivo (nao mais de package.json#pnpm).
-# Permite o build script do esbuild (dep de vitest/tsx); sem isso o pnpm 10 sai com
-# ERR_PNPM_IGNORED_BUILDS e quebra o `pnpm install` no CI.
-onlyBuiltDependencies:
-  - esbuild

@@ -31,7 +31,7 @@ jobs:
         with: { repository: freeflowsoftware/movvia-ai-review, ref: v1, path: _review }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: cd _review && npm i -g pnpm && pnpm install --prod=false
+      - run: cd _review && npm i -g pnpm@9 && pnpm install --prod=false
       - name: Gate Jira
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,7 +57,7 @@ jobs:
         with: { repository: freeflowsoftware/movvia-ai-review, ref: v1 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm i -g pnpm && pnpm install
+      - run: npm i -g pnpm@9 && pnpm install
       - id: set
         run: echo "matrix=$(npx tsx lib/discover.ts ${{ inputs.agents_dir }})" >> "$GITHUB_OUTPUT"
   review:
@@ -75,7 +75,7 @@ jobs:
         with: { repository: freeflowsoftware/movvia-ai-review, ref: v1, path: _review }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: cd _review && npm i -g pnpm && pnpm install
+      - run: cd _review && npm i -g pnpm@9 && pnpm install
       - name: Instalar opencode
         run: npm i -g opencode-ai || true
       - name: Capturar diff e titulo
@@ -111,7 +111,7 @@ jobs:
         with: { repository: freeflowsoftware/movvia-ai-review, ref: v1 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm i -g pnpm && pnpm install
+      - run: npm i -g pnpm@9 && pnpm install
       - name: Instalar opencode
         run: npm i -g opencode-ai || true
       - uses: actions/download-artifact@v4
@@ -138,7 +138,7 @@ jobs:
         with: { repository: freeflowsoftware/movvia-ai-review, ref: v1 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm i -g pnpm && pnpm install
+      - run: npm i -g pnpm@9 && pnpm install
       - uses: actions/download-artifact@v4
         with: { name: verdict, path: /tmp }
       - name: Postar review + check run
