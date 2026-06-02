@@ -8,9 +8,12 @@ on:
     secrets:
       LLM_API_KEY:            { required: true }
       LLM_BASE_URL:           { required: false }
-      REVIEW_APP_ID:          { required: true }
-      REVIEW_APP_PRIVATE_KEY: { required: true }
-      REVIEW_INSTALLATION_ID: { required: true }
+      # App opcional: sem ele, o post cai no GITHUB_TOKEN nativo e o review vira
+      # COMMENT (o veredicto fica no check run). Para travar merge via Ruleset com
+      # integration_id, configure o GitHub App e registre estes 3 secrets.
+      REVIEW_APP_ID:          { required: false }
+      REVIEW_APP_PRIVATE_KEY: { required: false }
+      REVIEW_INSTALLATION_ID: { required: false }
       REVIEW_PAT:             { required: false }
       JIRA_BASE_URL:          { required: false }
       JIRA_EMAIL:             { required: false }
@@ -144,6 +147,10 @@ jobs:
           REVIEW_APP_PRIVATE_KEY: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
           REVIEW_INSTALLATION_ID: ${{ secrets.REVIEW_INSTALLATION_ID }}
           REVIEW_PAT: ${{ secrets.REVIEW_PAT }}
+          # Fallback de identidade quando nao ha App/PAT: o token nativo do Actions
+          # posta comentario/inline/check run (review vira COMMENT). permissions ja
+          # concedem pull-requests:write + checks:write.
+          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}
         run: npx tsx lib/post.ts /tmp/verdict.json

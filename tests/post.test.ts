@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments } from '../lib/post.js';
+import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent } from '../lib/post.js';
 import { findingId } from '../lib/gatekeeper.js';
 import type { Finding, Verdict } from '../lib/types.js';
 
@@ -66,6 +66,17 @@ describe('buildInlineComments', () => {
     const comments = buildInlineComments([findings[0]!, segundo]);
     expect(comments.map((c) => c.path)).toEqual(['a.ts', 'b.ts']);
     expect(comments.map((c) => c.line)).toEqual([12, 31]);
+  });
+});
+
+describe('decideReviewEvent', () => {
+  it('mantem o veredicto formal quando ha identidade forte (App/PAT)', () => {
+    expect(decideReviewEvent('REQUEST_CHANGES', true)).toBe('REQUEST_CHANGES');
+    expect(decideReviewEvent('APPROVE', true)).toBe('APPROVE');
+  });
+  it('cai para COMMENT quando so ha GITHUB_TOKEN (sem identidade que conta)', () => {
+    expect(decideReviewEvent('REQUEST_CHANGES', false)).toBe('COMMENT');
+    expect(decideReviewEvent('APPROVE', false)).toBe('COMMENT');
   });
 });
 

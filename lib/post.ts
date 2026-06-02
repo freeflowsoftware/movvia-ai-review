@@ -1,5 +1,16 @@
 import type { Finding, Verdict } from './types.js';
+import type { ReviewEvent } from './github.js';
 import { findingId } from './gatekeeper.js';
+
+/**
+ * O review formal (APPROVE/REQUEST_CHANGES) so e submetido quando ha identidade que
+ * conta para branch protection (GitHub App ou PAT humano). Sem ela (piloto rodando
+ * com o GITHUB_TOKEN nativo), cai para COMMENT: o veredicto real fica no check run
+ * review-bot/verdict, que e o gate de merge — evita 422 e approve-de-bot inutil.
+ */
+export function decideReviewEvent(verdictEvent: 'APPROVE' | 'REQUEST_CHANGES', hasReviewIdentity: boolean): ReviewEvent {
+  return hasReviewIdentity ? verdictEvent : 'COMMENT';
+}
 
 export function summaryMarker(sha: string): string {
   return `<!-- movvia-ai-review:summary sha=${sha} -->`;
@@ -97,12 +108,17 @@ if (process.argv[1]?.endsWith('post.ts')) {
   const prNumber = Number(process.env.PR_NUMBER);
   // Auth via GitHub App (REVIEW_APP_ID/REVIEW_APP_PRIVATE_KEY/REVIEW_INSTALLATION_ID)
   // mintando installation token; fallback para REVIEW_PAT. Falha cedo se faltar tudo.
+  // Fallback para o GITHUB_TOKEN nativo do Actions quando nao ha App nem PAT (piloto):
+  // permite postar comentario/inline/check run com as permissions do workflow.
   const octokit = createOctokit({
     appId: process.env.REVIEW_APP_ID,
     privateKey: process.env.REVIEW_APP_PRIVATE_KEY,
     installationId: process.env.REVIEW_INSTALLATION_ID,
-    pat: process.env.REVIEW_PAT,
+    pat: process.env.REVIEW_PAT ?? process.env.GITHUB_TOKEN,
   });
+  // Identidade forte = App ou PAT humano (conta para branch protection). Só GITHUB_TOKEN
+  // não conta, então o review vira COMMENT e o veredicto real fica no check run.
+  const hasReviewIdentity = Boolean(process.env.REVIEW_APP_ID || process.env.REVIEW_PAT);
   const pr = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
   const sha = pr.data.head.sha;
   const summary = buildSummary(findings, verdict, sha);
@@ -119,7 +135,8 @@ if (process.argv[1]?.endsWith('post.ts')) {
   // junto do veredicto numa unica review (resumo no body) ancorada no sha revisado.
   // TODO pos-piloto: dedup inline via findingMarker + resolveReviewThread.
   const inlineComments = buildInlineComments(findings);
-  await postReview(octokit, { owner, repo, prNumber }, sha, verdict.event, summary, inlineComments);
+  const reviewEvent = decideReviewEvent(verdict.event, hasReviewIdentity);
+  await postReview(octokit, { owner, repo, prNumber }, sha, reviewEvent, summary, inlineComments);
   // O check run (via App) e quem trava o merge; o review formal via PAT do Pablo e
   // best-effort (o App nao pode aprovar o proprio PR de teste -> 422 ignorado).
   if (process.env.REVIEW_PAT) {

@@ -47,8 +47,13 @@ export function createOctokit(creds: GithubCredentials): Octokit {
   return new Octokit({ auth: auth.token });
 }
 
-/** Evento aceito por pulls.createReview no fluxo de veredicto (subset do union do Octokit). */
-export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES';
+/**
+ * Evento aceito por pulls.createReview no fluxo de veredicto (subset do union do Octokit).
+ * COMMENT e usado quando nao ha identidade que conte para branch protection (so
+ * GITHUB_TOKEN nativo, ex: piloto sem GitHub App) — posta inline + resumo sem tentar
+ * aprovar/reprovar formalmente; o veredicto real fica no check run review-bot/verdict.
+ */
+export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 
 /** Subconjunto do Octokit que approveBestEffort consome (permite fake nos testes). */
 export interface ReviewClient {
