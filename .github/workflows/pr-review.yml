@@ -2,6 +2,12 @@ name: AI Review
 on:
   pull_request: { types: [opened, synchronize, reopened] }
   issue_comment: { types: [created] }
+# A org desabilita write por DEFAULT no GITHUB_TOKEN; declarar permissions
+# explicitamente no caller concede o que o reusable precisa (postar review + check run).
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
 jobs:
   call:
     # Dogfooding: o movvia-ai-review revisa os proprios PRs via REFERENCIA LOCAL ao

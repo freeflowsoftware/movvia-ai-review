@@ -2,6 +2,12 @@ name: AI Review
 on:
   pull_request: { types: [opened, synchronize, reopened] }
   issue_comment: { types: [created] }
+# Declarar permissions explicitamente: a org desabilita write por default no
+# GITHUB_TOKEN, e o reusable precisa postar review (pull-requests) + check run (checks).
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
 jobs:
   call:
     # FIX P0-seguranca: o branch issue_comment roda com `secrets: inherit` (todos os
