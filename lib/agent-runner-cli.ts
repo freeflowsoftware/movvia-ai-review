@@ -5,6 +5,12 @@ import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildPrompt } from './context-loader.js';
 import { runAgent, realOpencodeRunner } from './run-agent.js';
 import { ADR_GLOBS } from './adr.js';
+import {
+  extractJiraKey,
+  fetchJiraTicket,
+  HttpJiraClient,
+  type JiraTicket,
+} from './jira.js';
 
 export function loadRepoRules(repoDir: string): string {
   const parts: string[] = [];
@@ -48,6 +54,28 @@ export function loadAdrs(repoDir: string): string {
   return matches.map((rel) => readFileSync(join(repoDir, rel), 'utf8')).join('\n\n');
 }
 
+/**
+ * Resolve a chave Jira do PR: JIRA_KEY explicito tem prioridade; senao extrai do PR_TITLE.
+ * Early return quando nada casa para nao chamar a Jira a toa nos repos sem ticket no titulo.
+ */
+export function resolveJiraKey(env: NodeJS.ProcessEnv): string | null {
+  if (env.JIRA_KEY) return env.JIRA_KEY;
+  return env.PR_TITLE ? extractJiraKey(env.PR_TITLE) : null;
+}
+
+/**
+ * Busca a US do Jira para injetar no prompt. Borda externa via HttpJiraClient (DIP).
+ * Retorna undefined (nao null) quando falta chave ou secrets — buildPrompt omite a secao.
+ * Sem isso, o agente de requisitos opera sem a US e o gating de dominio cai (bug F6).
+ */
+export async function loadJiraTicket(env: NodeJS.ProcessEnv): Promise<JiraTicket | undefined> {
+  const key = resolveJiraKey(env);
+  const { JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN } = env;
+  if (!key || !JIRA_BASE_URL || !JIRA_EMAIL || !JIRA_API_TOKEN) return undefined;
+  const client = new HttpJiraClient(JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN);
+  return (await fetchJiraTicket(key, client)) ?? undefined;
+}
+
 // CLI: agent-runner-cli.ts <agentName> <repoDir> <diffPath>
 if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // Fallback '' nos argv (mesma convencao de jira.ts/adr.ts) para satisfazer
@@ -58,12 +86,14 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   const diff = readFileSync(diffPath, 'utf8');
   // matchAll devolve grupos string|undefined; o regex casa => m[1] sempre presente.
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? '');
+  const ticket = await loadJiraTicket(process.env);
   const prompt = buildPrompt({
     spec,
     repoRules: loadRepoRules(repoDir),
     langPacks: loadLangPacks(changedFiles, central),
     adrs: loadAdrs(repoDir),
     diff,
+    ticket,
   });
   const model = process.env.AGENT_MODEL || 'gemini/gemini-flash-lite';
   const res = await runAgent(spec, prompt, model, realOpencodeRunner);

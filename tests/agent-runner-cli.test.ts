@@ -3,7 +3,13 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadRepoRules, loadLangPacks, loadAdrs } from '../lib/agent-runner-cli.js';
+import {
+  loadRepoRules,
+  loadLangPacks,
+  loadAdrs,
+  resolveJiraKey,
+  loadJiraTicket,
+} from '../lib/agent-runner-cli.js';
 
 describe('loadRepoRules', () => {
   it('concatena .claude/rules/*.md e CLAUDE.md do repo alvo', () => {
@@ -47,5 +53,32 @@ describe('loadAdrs', () => {
   it('retorna string vazia quando nao ha ADRs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'repo-'));
     expect(loadAdrs(dir)).toBe('');
+  });
+});
+
+describe('resolveJiraKey', () => {
+  it('prioriza JIRA_KEY explicito', () => {
+    expect(resolveJiraKey({ JIRA_KEY: 'PED-7', PR_TITLE: 'feat PED-9 x' })).toBe('PED-7');
+  });
+  it('extrai do PR_TITLE quando JIRA_KEY ausente', () => {
+    expect(resolveJiraKey({ PR_TITLE: 'feat: saldo PED-1234' })).toBe('PED-1234');
+  });
+  it('retorna null sem chave nem titulo', () => {
+    expect(resolveJiraKey({})).toBeNull();
+  });
+});
+
+describe('loadJiraTicket', () => {
+  // Sem secrets Jira a busca e pulada (undefined => buildPrompt omite a secao).
+  it('retorna undefined quando faltam secrets Jira', async () => {
+    expect(await loadJiraTicket({ JIRA_KEY: 'PED-1' })).toBeUndefined();
+  });
+  it('retorna undefined quando nao ha chave (mesmo com secrets)', async () => {
+    const env = {
+      JIRA_BASE_URL: 'https://x.atlassian.net',
+      JIRA_EMAIL: 'a@b.com',
+      JIRA_API_TOKEN: 't',
+    };
+    expect(await loadJiraTicket(env)).toBeUndefined();
   });
 });

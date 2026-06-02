@@ -1,4 +1,5 @@
 import type { AgentSpec } from './types.js';
+import type { JiraTicket } from './jira.js';
 
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'javascript-typescript', tsx: 'javascript-typescript',
@@ -23,6 +24,18 @@ export interface PromptParts {
   langPacks: string[];
   adrs: string;
   diff: string;
+  /** US do Jira; quando presente, o agente de requisitos confronta os criterios de aceite. */
+  ticket?: JiraTicket;
+}
+
+/**
+ * Seccao "## US do Jira" do prompt. So existe quando ha ticket: sem ela o agente de
+ * requisitos opera sem a US e o gating de dominio (diferencial do produto) cai. Vazia
+ * (sem ticket) para nao adicionar linhas em branco/ruido no prompt dos demais agentes.
+ */
+function jiraSection(ticket: JiraTicket | undefined): string[] {
+  if (!ticket) return [];
+  return ['## US do Jira', `${ticket.summary}\n\n${ticket.description}`.trim(), ''];
 }
 
 export function buildPrompt(p: PromptParts): string {
@@ -32,6 +45,7 @@ export function buildPrompt(p: PromptParts): string {
   return [
     p.spec.persona,
     '',
+    ...jiraSection(p.ticket),
     '## Calibracao de severidade',
     hints || '(sem hints)',
     '',

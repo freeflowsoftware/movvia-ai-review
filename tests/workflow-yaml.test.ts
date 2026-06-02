@@ -79,6 +79,27 @@ describe('credencial do LLM chega ao opencode em runtime', () => {
   });
 });
 
+// FIX F6: o agente de requisitos precisa da US do Jira. O step de review deve receber
+// os secrets Jira e exportar PR_TITLE para extrair a chave (lib/jira.ts/agent-runner-cli).
+describe('contexto da US do Jira chega ao agente de requisitos', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  it('o step de review exporta os secrets Jira ao agente', () => {
+    const step = findStep(wf, 'review', 'Rodar agente');
+    const keys = Object.keys(step.env ?? {});
+    expect(keys).toContain('JIRA_BASE_URL');
+    expect(keys).toContain('JIRA_EMAIL');
+    expect(keys).toContain('JIRA_API_TOKEN');
+  });
+
+  it('o step de review define PR_TITLE para extrair a chave Jira', () => {
+    const step = findStep(wf, 'review', 'Rodar agente');
+    expect(step.run ?? '').toContain('PR_TITLE');
+  });
+});
+
 // FIX P0-seguranca: o caller usa `secrets: inherit`, entao o branch issue_comment do
 // `if:` PRECISA exigir que o comentario seja em um PR e que o autor seja membro do repo,
 // senao qualquer pessoa que abra um PR de fork dispara o pipeline com todos os org secrets.

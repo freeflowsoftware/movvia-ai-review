@@ -75,10 +75,12 @@ jobs:
       - run: cd _review && npm i -g pnpm && pnpm install
       - name: Instalar opencode
         run: npm i -g opencode-ai || true
-      - name: Capturar diff
+      - name: Capturar diff e titulo
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+        run: |
+          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+          gh pr view ${{ inputs.pr_number }} --json title -q .title > /tmp/pr-title.txt
       - name: Rodar agente ${{ matrix.name }}
         env:
           # O opencode lê o provider OpenAI-compatible de _review/opencode.json (cwd do
@@ -88,7 +90,14 @@ jobs:
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           AGENT_NAME: ${{ matrix.name }}
           AGENT_MODEL: ${{ matrix.model }}
-        run: cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff > "/tmp/findings-${AGENT_NAME}.json"
+          # FIX F6: o agente de requisitos precisa da US do Jira. PR_TITLE alimenta a
+          # extracao da chave (lib/jira.ts) e os secrets Jira liberam a busca do contexto.
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          export PR_TITLE="$(cat /tmp/pr-title.txt)"
+          cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff > "/tmp/findings-${AGENT_NAME}.json"
       - uses: actions/upload-artifact@v4
         with: { name: "findings-${{ matrix.name }}", path: "/tmp/findings-${{ matrix.name }}.json" }
   gatekeeper:

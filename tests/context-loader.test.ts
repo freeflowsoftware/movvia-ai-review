@@ -37,4 +37,28 @@ describe('buildPrompt', () => {
     expect(p).toContain('startLine');           // schema explicito (camelCase canonico)
     expect(p).toContain('camelCase');
   });
+
+  // FIX P1-funcional: o agente de requisitos precisa ver a US do Jira no prompt para
+  // confrontar criterios de aceite com o que o PR implementa. Sem o ticket, o gating de
+  // dominio (diferencial do produto) opera no escuro. Estes asserts travam a secao.
+  it('inclui a secao "## US do Jira" com summary/description quando ticket presente', () => {
+    const p = buildPrompt({
+      spec: SPEC,
+      repoRules: '',
+      langPacks: [],
+      adrs: '',
+      diff: '+const x = 1;',
+      ticket: { summary: 'Debitar saldo no pedagio', description: 'AC1: travar conta antes do debito' },
+    });
+    expect(p).toContain('## US do Jira');
+    expect(p).toContain('Debitar saldo no pedagio');
+    expect(p).toContain('AC1: travar conta antes do debito');
+  });
+
+  it('omite a secao "## US do Jira" quando nao ha ticket', () => {
+    const p = buildPrompt({
+      spec: SPEC, repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;',
+    });
+    expect(p).not.toContain('## US do Jira');
+  });
 });
