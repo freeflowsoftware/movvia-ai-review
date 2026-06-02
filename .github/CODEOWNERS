@@ -1,0 +1,5 @@
+# Reviewer humano obrigatorio nos paths criticos (alem do bot)
+*                      @pablowinck
+/src/financeiro/       @pablowinck
+pe-migrations/         @pablowinck
+**/schema.prisma       @pablowinck
