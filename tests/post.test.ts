@@ -61,7 +61,7 @@ describe('buildInlineComments', () => {
 
   it('produz um comentario por finding preservando a ordem', () => {
     const segundo: Finding = {
-      ...findings[0]!, file: 'b.ts', startLine: 30, endLine: 31, title: 'Outro', category: 'perf',
+      ...findings[0]!, file: 'b.ts', startLine: 30, endLine: 31, title: 'Outro', category: 'perf', cite: 'b.ts:30-31',
     };
     const comments = buildInlineComments([findings[0]!, segundo]);
     expect(comments.map((c) => c.path)).toEqual(['a.ts', 'b.ts']);

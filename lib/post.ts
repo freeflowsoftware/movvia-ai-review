@@ -1,6 +1,7 @@
 import type { Finding, Verdict } from './types.js';
 import type { ReviewEvent } from './github.js';
 import { findingId } from './gatekeeper.js';
+import { parseCite } from './cite-the-line.js';
 
 /**
  * O review formal (APPROVE/REQUEST_CHANGES) so e submetido quando ha identidade que
@@ -62,7 +63,14 @@ function buildInlineBody(f: Finding): string {
  * inteiro citado em `cite`. Funcao PURA: o post real fica em postReview (borda).
  */
 export function buildInlineComments(findings: Finding[]): InlineComment[] {
-  return findings.map((f) => ({ path: f.file, line: f.endLine, body: buildInlineBody(f) }));
+  // path/line vem do `cite` JA VALIDADO contra o diff (relativo ao repo), nao do
+  // `file`/`endLine` crus — alguns modelos emitem caminho absoluto (ex: do checkout
+  // _review), o que faz o GitHub rejeitar a review inteira com 422 "Path could not
+  // be resolved". Fallback para file/endLine se o cite nao parsear.
+  return findings.map((f) => {
+    const cite = parseCite(f.cite);
+    return { path: cite?.file ?? f.file, line: cite?.end ?? f.endLine, body: buildInlineBody(f) };
+  });
 }
 
 export function buildSummary(findings: Finding[], verdict: Verdict, sha: string): string {
