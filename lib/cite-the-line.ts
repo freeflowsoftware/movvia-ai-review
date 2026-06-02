@@ -14,7 +14,10 @@ export function parseAddedLines(diff: string): Map<string, Set<number>> {
       newLine = m ? Number(m[1]) : 0;
       continue;
     }
-    if (raw.startsWith('+++') || raw.startsWith('---')) continue;
+    // Header de arquivo/marcador so com ESPACO ("+++ b/path", "--- a/path"):
+    // conteudo adicionado como "++count" nao tem espaco e deve contar como linha,
+    // senao newLine para de avancar e desalinha todas as citacoes seguintes.
+    if (raw.startsWith('+++ ') || raw.startsWith('--- ')) continue;
     if (raw.startsWith('+')) {
       map.get(file)?.add(newLine);
       newLine++;

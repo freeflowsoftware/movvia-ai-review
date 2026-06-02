@@ -14,10 +14,26 @@ const DIFF = `diff --git a/src/a.ts b/src/a.ts
 +novo
 `;
 
+// Conteudo adicionado que comeca com ++/--. O git emite headers como "+++ b/path"
+// e "--- a/path" COM ESPACO; conteudo como "++count" nao tem espaco e deve contar
+// como linha adicionada normal, senao newLine para de avancar e desalinha tudo.
+const DIFF_CONTEUDO_PLUS_PLUS = `diff --git a/src/c.ts b/src/c.ts
+--- a/src/c.ts
++++ b/src/c.ts
+@@ -0,0 +1,2 @@
++++count
++next
+`;
+
 describe('parseAddedLines', () => {
   it('mapeia linhas adicionadas por arquivo (numeracao do arquivo NOVO)', () => {
     const map = parseAddedLines(DIFF);
     expect([...(map.get('src/a.ts') ?? [])].sort((x, y) => x - y)).toEqual([11, 12, 42]);
+  });
+
+  it('trata conteudo "++"/"--" como linha (nao como header) sem off-by-one', () => {
+    const map = parseAddedLines(DIFF_CONTEUDO_PLUS_PLUS);
+    expect([...(map.get('src/c.ts') ?? [])].sort((x, y) => x - y)).toEqual([1, 2]);
   });
 });
 
