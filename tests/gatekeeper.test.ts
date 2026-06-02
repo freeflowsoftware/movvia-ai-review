@@ -1,0 +1,86 @@
+// tests/gatekeeper.test.ts
+import { describe, it, expect } from 'vitest';
+import { findingId, dedupe, decideVerdict, filterByCite, runAdversarial, type Refuter } from '../lib/gatekeeper.js';
+import type { Finding } from '../lib/types.js';
+
+function f(over: Partial<Finding>): Finding {
+  return {
+    agent: 'seguranca', file: 'a.ts', startLine: 10, endLine: 12, severity: 'P1',
+    category: 'lock', title: 't', rationale: 'r', suggestion: 's', cite: 'a.ts:10-12', ...over,
+  };
+}
+
+describe('findingId', () => {
+  it('e estavel para mesmo arquivo+range+categoria', () => {
+    expect(findingId(f({}))).toBe(findingId(f({ title: 'outro titulo' })));
+  });
+  it('difere por categoria', () => {
+    expect(findingId(f({ category: 'lock' }))).not.toBe(findingId(f({ category: 'sql' })));
+  });
+  // Regressao: a ancoragem de findingId e de dedupe precisa concordar. Antes,
+  // findingId usava bucket fixo floor(startLine/3) e dedupe usava janela ±3,
+  // entao um deslocamento de 1 linha cruzando a fronteira do bucket (11→12)
+  // mudava o ID estavel apesar de dedupe fundir os dois — quebrando a promessa
+  // de idempotencia. Agora os dois usam a mesma ancora de linha (lineAnchor).
+  it('concorda com dedupe: linhas que o dedupe funde compartilham o mesmo ID', () => {
+    const fundidos = dedupe([f({ startLine: 11 }), f({ startLine: 12 })]);
+    expect(fundidos).toHaveLength(1);
+    expect(findingId(f({ startLine: 11 }))).toBe(findingId(f({ startLine: 12 })));
+    expect(findingId(fundidos[0]!)).toBe(findingId(f({ startLine: 11 })));
+  });
+});
+
+describe('dedupe', () => {
+  it('funde findings da mesma categoria a ±3 linhas mantendo a maior severidade', () => {
+    const out = dedupe([f({ severity: 'P2', startLine: 10 }), f({ severity: 'P0', startLine: 12 })]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.severity).toBe('P0');
+  });
+  it('mantem findings de categorias diferentes', () => {
+    expect(dedupe([f({ category: 'lock' }), f({ category: 'sql' })])).toHaveLength(2);
+  });
+  // Regressao: o casamento de chave precisa ser exato no par file:category.
+  // Antes usava k.startsWith(`${file}:${category}`); como `category` e string
+  // livre vinda do modelo, uma categoria prefixo de outra (lock x lockfile)
+  // fundia DOIS findings distintos em um, descartando silenciosamente um achado
+  // valido — aqui um P0 de outra categoria sumia.
+  it('nao funde categorias onde uma e prefixo da outra (lock x lockfile)', () => {
+    const out = dedupe([f({ category: 'lockfile', severity: 'P0', startLine: 10 }), f({ category: 'lock', severity: 'P1', startLine: 12 })]);
+    expect(out).toHaveLength(2);
+    expect(out.map((x) => x.severity).sort()).toEqual(['P0', 'P1']);
+  });
+});
+
+describe('filterByCite', () => {
+  it('remove findings sem ancora valida no diff', () => {
+    const added = new Map([['a.ts', new Set([10, 11, 12])]]);
+    const out = filterByCite([f({ cite: 'a.ts:10-12' }), f({ cite: 'a.ts:99-100' })], added);
+    expect(out).toHaveLength(1);
+  });
+});
+
+describe('runAdversarial', () => {
+  it('descarta finding refutado pelo refuter injetado', async () => {
+    const refuter: Refuter = async (finding) => ({ refuted: finding.category === 'falso', score: 9 });
+    const out = await runAdversarial([f({ category: 'real' }), f({ category: 'falso' })], refuter, 0.8);
+    expect(out.map((x) => x.category)).toEqual(['real']);
+  });
+  it('descarta finding com score abaixo do threshold', async () => {
+    const refuter: Refuter = async () => ({ refuted: false, score: 3 });
+    expect(await runAdversarial([f({})], refuter, 0.8)).toEqual([]);
+  });
+});
+
+describe('decideVerdict', () => {
+  it('REQUEST_CHANGES/failure quando ha P1', () => {
+    const v = decideVerdict([f({ severity: 'P1' })]);
+    expect(v).toMatchObject({ event: 'REQUEST_CHANGES', conclusion: 'failure' });
+  });
+  it('APPROVE/success quando so ha P2', () => {
+    const v = decideVerdict([f({ severity: 'P2' })]);
+    expect(v).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
+  });
+  it('APPROVE/success quando nao ha findings', () => {
+    expect(decideVerdict([])).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
+  });
+});
