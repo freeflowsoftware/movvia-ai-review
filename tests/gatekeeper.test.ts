@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, buildRefuteUserPrompt, buildRefuter, type Refuter } from '../lib/gatekeeper.js';
+import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, buildRefuteUserPrompt, buildRefuter, capProcessGateSeverity, type Refuter } from '../lib/gatekeeper.js';
 import type { ChatRunner } from '../lib/run-agent.js';
 import type { Finding } from '../lib/types.js';
 
@@ -190,6 +190,34 @@ describe('buildRefuter (context-aware)', () => {
     await refute(f({ file: 'a.ts' }));
     expect(espiao.ultimoUser).not.toContain('Contexto do codebase do arquivo:');
   });
+
+  // Anti-alucinacao do PROPRIO cetico (lição do PR #475): se ele MANTEM o finding citando
+  // uma evidencia que NAO existe no codigo, ele inventou a prova -> descarta.
+  it('descarta quando o cetico mantem (refuted=false) citando evidencia INEXISTENTE no excerpt', async () => {
+    const run: ChatRunner = async () => '{"refuted":false,"score":9,"evidence":"if (valorTotal < 0)"}';
+    const refute = buildRefuter(run, 'm', () => 'let valorTotal = 0; for (const v of itens) valorTotal += v.x;');
+    expect(await refute(f({ file: 'a.ts' }))).toEqual({ refuted: true, score: 0 });
+  });
+
+  it('mantem (refuted=false) quando a evidencia citada EXISTE no excerpt', async () => {
+    const run: ChatRunner = async () => '{"refuted":false,"score":9,"evidence":"metodoReal()"}';
+    const refute = buildRefuter(run, 'm', () => 'class X { metodoReal() { return 1; } }');
+    expect(await refute(f({ file: 'a.ts' }))).toEqual({ refuted: false, score: 9 });
+  });
+
+  it('evidencia vazia NAO forca descarte (preserva recall de finding real nao-transcrito)', async () => {
+    const run: ChatRunner = async () => '{"refuted":false,"score":9,"evidence":""}';
+    const refute = buildRefuter(run, 'm', () => 'class X {}');
+    expect(await refute(f({ file: 'a.ts' }))).toEqual({ refuted: false, score: 9 });
+  });
+});
+
+describe('buildRefuteUserPrompt — severidade e evidencia', () => {
+  it('inclui a severidade alegada e pede a evidencia literal', () => {
+    const prompt = buildRefuteUserPrompt(f({ severity: 'P0' }));
+    expect(prompt).toContain('Severidade alegada: P0');
+    expect(prompt).toContain('evidence');
+  });
 });
 
 describe('runAdversarial', () => {
@@ -275,5 +303,18 @@ describe('decideVerdict', () => {
   });
   it('APPROVE/success quando nao ha findings', () => {
     expect(decideVerdict([])).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
+  });
+});
+
+describe('capProcessGateSeverity', () => {
+  it('capa findings do adr-guardian em P2 (gate de processo nunca bloqueia merge)', () => {
+    const out = capProcessGateSeverity([f({ agent: 'adr-guardian', severity: 'P1' }), f({ agent: 'seguranca', severity: 'P0' })]);
+    expect(out[0]!.severity).toBe('P2');
+    expect(out[1]!.severity).toBe('P0'); // agente de codigo intacto
+  });
+  it('nao altera findings de outros agentes nem os ja P2', () => {
+    const out = capProcessGateSeverity([f({ agent: 'requisitos', severity: 'P1' }), f({ agent: 'adr-guardian', severity: 'P2' })]);
+    expect(out[0]!.severity).toBe('P1'); // requisitos NAO e capado
+    expect(out[1]!.severity).toBe('P2');
   });
 });
