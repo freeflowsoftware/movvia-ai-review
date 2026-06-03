@@ -144,7 +144,7 @@ async function findExistingSummaryId(
 // --- CLI: post.ts <verdictPath> → posta resumo (idempotente) + inline + check run ---
 if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
-  const { createOctokit, emitCheckRun, approveBestEffort, postReview } = await import('./github.js');
+  const { createOctokit, emitCheckRun, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads } = await import('./github.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
   const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
@@ -176,17 +176,29 @@ if (process.argv[1]?.endsWith('post.ts')) {
   } else {
     await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body: summary });
   }
-  // Diferencial do prototipo /revisar-pr: comentarios INLINE na linha exata. Postados
-  // junto do veredicto numa unica review (resumo no body) ancorada no sha revisado.
-  // TODO pos-piloto: dedup inline via findingMarker + resolveReviewThread.
-  const inlineComments = buildInlineComments(findings);
+  // Re-review: reconcilia os findings ATUAIS contra as threads inline que JA postamos.
+  // O octokit do Octokit expoe `.graphql`, entao ele mesmo serve de GraphqlClient.
+  const existing = await listFindingThreads(octokit, { owner, repo, prNumber });
+  const { toPost, toResolveThreadIds } = reconcileInline(findings, existing);
+  // Diferencial do prototipo /revisar-pr: comentarios INLINE na linha exata. Posta
+  // SO os novos (toPost) numa unica review ancorada no sha; dedup via findingMarker.
+  const inlineComments = buildInlineComments(toPost);
   const reviewEvent = decideReviewEvent(verdict.event, hasReviewIdentity);
-  await postReview(octokit, { owner, repo, prNumber }, sha, reviewEvent, summary, inlineComments);
+  // toPost vazio -> NAO chama createReview com comments (GitHub rejeita review inline
+  // vazia com 422); o veredicto ja saiu no check run + resumo idempotente acima.
+  if (inlineComments.length > 0) {
+    await postReview(octokit, { owner, repo, prNumber }, sha, reviewEvent, summary, inlineComments);
+  }
+  // Fecha as threads cujos findings o dev ja corrigiu (marker sumiu). Idempotente:
+  // resolver thread ja resolvida e no-op; allSettled isola falha por thread.
+  await resolveReviewThreads(octokit, toResolveThreadIds);
   // O check run (via App) e quem trava o merge; o review formal via PAT do Pablo e
   // best-effort (o App nao pode aprovar o proprio PR de teste -> 422 ignorado).
   if (process.env.REVIEW_PAT) {
     const pat = createOctokit({ pat: process.env.REVIEW_PAT });
     await approveBestEffort(pat, { owner, repo, prNumber }, verdict.event);
   }
-  console.log(`Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} inline)`);
+  console.log(
+    `Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} novos inline, ${toResolveThreadIds.length} threads resolvidas)`,
+  );
 }

@@ -129,6 +129,101 @@ export async function postReview(
   });
 }
 
+/**
+ * Subconjunto do Octokit que os wrappers GraphQL consomem (o Octokit expoe `.graphql`).
+ * Borda externa injetada -> permite FakeGraphqlClient nomeado nos testes (nunca stub
+ * inline) sem tocar a rede.
+ */
+export interface GraphqlClient {
+  graphql<T = unknown>(query: string, vars: Record<string, unknown>): Promise<T>;
+}
+
+/** Shape minimo do payload de reviewThreads que listFindingThreads le. */
+interface ReviewThreadsResponse {
+  repository: {
+    pullRequest: {
+      reviewThreads: {
+        nodes: Array<{
+          id: string;
+          isResolved: boolean;
+          comments: { nodes: Array<{ body: string }> };
+        }>;
+      };
+    };
+  };
+}
+
+const REVIEW_THREADS_QUERY = `
+  query($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes { id isResolved comments(first: 1) { nodes { body } } }
+        }
+      }
+    }
+  }`;
+
+const RESOLVE_THREAD_MUTATION = `
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread { id isResolved }
+    }
+  }`;
+
+/**
+ * Casa o findingMarker invisivel cravado em buildInlineBody (post.ts). Mesmo formato
+ * `<!-- movvia-ai-review:<agente>:<findingId> -->`; usado para reconhecer comentarios
+ * NOSSOS entre os de humanos/outros bots na review thread.
+ */
+const FINDING_MARKER_PATTERN = /<!-- movvia-ai-review:[^>]+ -->/;
+
+/**
+ * Borda externa: lista as review threads NAO resolvidas do PR e extrai o par
+ * { marker, threadId } so das que sao NOSSAS (1o comentario carrega o findingMarker).
+ *
+ * E o lado de leitura do re-review: alimenta reconcileInline com o que ja postamos
+ * para decidir o que duplicar (toPost) e o que fechar (toResolveThreadIds). Filtra
+ * isResolved aqui porque thread ja resolvida nao volta para o ciclo de dedup.
+ */
+export async function listFindingThreads(
+  gql: GraphqlClient,
+  t: PostTarget,
+): Promise<Array<{ marker: string; threadId: string }>> {
+  const data = await gql.graphql<ReviewThreadsResponse>(REVIEW_THREADS_QUERY, {
+    owner: t.owner,
+    repo: t.repo,
+    pr: t.prNumber,
+  });
+  const threads = data.repository.pullRequest.reviewThreads.nodes;
+  const naoResolvidas = threads.filter((thread) => !thread.isResolved);
+  return naoResolvidas.flatMap(parseFindingThread);
+}
+
+/** Extrai o marker do 1o comentario; lista vazia descarta threads sem marker nosso. */
+function parseFindingThread(
+  thread: { id: string; comments: { nodes: Array<{ body: string }> } },
+): Array<{ marker: string; threadId: string }> {
+  const primeiroComentario = thread.comments.nodes[0]?.body ?? '';
+  const marker = FINDING_MARKER_PATTERN.exec(primeiroComentario)?.[0];
+  if (!marker) return [];
+  return [{ marker, threadId: thread.id }];
+}
+
+/**
+ * Borda externa: resolve (fecha) as review threads cujos findings o dev ja corrigiu.
+ *
+ * IDEMPOTENTE: resolver uma thread ja resolvida e no-op seguro no GitHub, entao re-run
+ * num mesmo PR nao quebra. Promise.allSettled para que UMA mutation que falhe (ex:
+ * thread apagada, permissao) nao derrube as outras — o ciclo de re-review nao deve
+ * parar por causa de uma thread problematica.
+ */
+export async function resolveReviewThreads(gql: GraphqlClient, threadIds: string[]): Promise<void> {
+  await Promise.allSettled(
+    threadIds.map((threadId) => gql.graphql(RESOLVE_THREAD_MUTATION, { threadId })),
+  );
+}
+
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */
 export async function emitCheckRun(
   octokit: Octokit,

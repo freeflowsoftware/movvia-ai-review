@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOctokitAuth, approveBestEffort, postReview, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment } from '../lib/github.js';
+import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient } from '../lib/github.js';
 
 // resolveOctokitAuth e logica pura de SELECAO de auth (qual credencial usar), sem
 // tocar a rede. A montagem do Octokit (I/O / borda externa) fica em createOctokit,
@@ -89,5 +89,95 @@ describe('approveBestEffort', () => {
     await expect(
       approveBestEffort(fake, { owner: 'o', repo: 'r', prNumber: 7 }, 'APPROVE'),
     ).resolves.toBeUndefined();
+  });
+});
+
+// Fake nomeado da borda GraphQL (Octokit.graphql): nao toca a rede. Devolve um
+// payload de reviewThreads pre-montado para a query e captura os ids resolvidos
+// para a mutation; opcionalmente falha em um threadId especifico (testa allSettled).
+class FakeGraphqlClient implements GraphqlClient {
+  public threadIdsResolvidos: string[] = [];
+  constructor(
+    private readonly threadsPayload: ReviewThreadNode[] = [],
+    private readonly threadIdQueFalha?: string,
+  ) {}
+
+  graphql<T = unknown>(query: string, vars: Record<string, unknown>): Promise<T> {
+    if (query.includes('reviewThreads')) {
+      const payload = {
+        repository: { pullRequest: { reviewThreads: { nodes: this.threadsPayload } } },
+      };
+      return Promise.resolve(payload as T);
+    }
+    const threadId = vars.threadId as string;
+    this.threadIdsResolvidos.push(threadId);
+    if (threadId === this.threadIdQueFalha) {
+      return Promise.reject(new Error(`thread ${threadId} ja apagada (mutation falhou)`));
+    }
+    return Promise.resolve({} as T);
+  }
+}
+
+interface ReviewThreadNode {
+  id: string;
+  isResolved: boolean;
+  comments: { nodes: Array<{ body: string }> };
+}
+
+// Helper: monta um node de review thread com o body do 1o comentario.
+function makeThread(id: string, isResolved: boolean, primeiroBody: string): ReviewThreadNode {
+  return { id, isResolved, comments: { nodes: [{ body: primeiroBody }] } };
+}
+
+const target = { owner: 'o', repo: 'r', prNumber: 7 };
+const MARKER_NOSSO = '<!-- movvia-ai-review:seguranca:abc123def456 -->';
+
+describe('listFindingThreads', () => {
+  it('parseia { marker, threadId } das threads NOSSAS nao resolvidas', async () => {
+    const corpoComMarker = `**P0** — Token hardcoded\n\nrationale\n\n${MARKER_NOSSO}`;
+    const gql = new FakeGraphqlClient([makeThread('T1', false, corpoComMarker)]);
+    const threads = await listFindingThreads(gql, target);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1' }]);
+  });
+
+  it('descarta threads ja resolvidas (nao voltam para o ciclo de dedup)', async () => {
+    const gql = new FakeGraphqlClient([makeThread('T2', true, `corpo\n${MARKER_NOSSO}`)]);
+    expect(await listFindingThreads(gql, target)).toEqual([]);
+  });
+
+  it('descarta threads sem o nosso marker (comentario de humano / outro bot)', async () => {
+    const gql = new FakeGraphqlClient([makeThread('T3', false, 'comentario solto de um dev')]);
+    expect(await listFindingThreads(gql, target)).toEqual([]);
+  });
+
+  it('mistura: retorna so a thread nossa nao resolvida entre varias', async () => {
+    const gql = new FakeGraphqlClient([
+      makeThread('T1', false, `${MARKER_NOSSO}`),
+      makeThread('T2', true, `resolvida\n${MARKER_NOSSO}`),
+      makeThread('T3', false, 'sem marker'),
+    ]);
+    const threads = await listFindingThreads(gql, target);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1' }]);
+  });
+});
+
+describe('resolveReviewThreads', () => {
+  it('chama a mutation resolveReviewThread por threadId', async () => {
+    const gql = new FakeGraphqlClient();
+    await resolveReviewThreads(gql, ['T1', 'T2']);
+    expect(gql.threadIdsResolvidos).toEqual(['T1', 'T2']);
+  });
+
+  it('uma mutation que falha NAO derruba as outras (Promise.allSettled)', async () => {
+    // Thread apagada / sem permissao -> uma falha nao pode parar o ciclo de re-review.
+    const gql = new FakeGraphqlClient([], 'T_FALHA');
+    await expect(resolveReviewThreads(gql, ['T1', 'T_FALHA', 'T3'])).resolves.toBeUndefined();
+    expect(gql.threadIdsResolvidos).toEqual(['T1', 'T_FALHA', 'T3']);
+  });
+
+  it('lista vazia e no-op (nada a resolver)', async () => {
+    const gql = new FakeGraphqlClient();
+    await resolveReviewThreads(gql, []);
+    expect(gql.threadIdsResolvidos).toEqual([]);
   });
 });
