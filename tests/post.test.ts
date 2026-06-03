@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent, reconcileInline } from '../lib/post.js';
+import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent, reconcileInline, summaryRefFromComments, shouldReconcileByDelta } from '../lib/post.js';
 import type { ExistingThread } from '../lib/post.js';
 import { findingId } from '../lib/gatekeeper.js';
 import type { Finding, Verdict } from '../lib/types.js';
@@ -87,6 +87,56 @@ describe('buildSummary', () => {
     expect(s).toContain('1 P0');
     expect(s).toContain('Mudancas necessarias');
     expect(s).toContain(summaryMarker('abc1234'));
+  });
+});
+
+describe('summaryRefFromComments', () => {
+  // Logica PURA: dado os comentarios top-level do PR, acha o resumo NOSSO (marker) e
+  // devolve { id, previousSha }. O previousSha alimenta o re-review por delta — sem ele
+  // o post nao sabe qual era o SHA do ultimo review para calcular changedFiles.
+  it('devolve id + previousSha do resumo existente (parse do body via parseSummarySha)', () => {
+    const body = `## resumo\n${summaryMarker('deadbeef')}`;
+    const ref = summaryRefFromComments([{ id: 42, body }]);
+    expect(ref).toEqual({ id: 42, previousSha: 'deadbeef' });
+  });
+
+  it('1o review (sem resumo nosso) -> { id: null, previousSha: null }', () => {
+    const ref = summaryRefFromComments([{ id: 7, body: 'comentario solto de dev' }]);
+    expect(ref).toEqual({ id: null, previousSha: null });
+  });
+
+  it('acha o resumo entre varios comentarios (ignora os de humanos)', () => {
+    const comments = [
+      { id: 1, body: 'review humano' },
+      { id: 99, body: `resumo\n${summaryMarker('abc1234')}` },
+    ];
+    expect(summaryRefFromComments(comments)).toEqual({ id: 99, previousSha: 'abc1234' });
+  });
+
+  it('resumo presente mas sem sha parseavel -> id setado, previousSha null', () => {
+    // Resumo antigo (formato anterior, sem o marker de sha): reusa o id para o update
+    // idempotente, mas nao ha SHA anterior -> cai no caminho de reconciliar tudo.
+    const ref = summaryRefFromComments([{ id: 5, body: '<!-- movvia-ai-review:summary -->' }]);
+    expect(ref).toEqual({ id: 5, previousSha: null });
+  });
+});
+
+describe('shouldReconcileByDelta', () => {
+  // Decisao PURA que o CLI usa para escolher entre reconciliar por delta (changedFiles)
+  // ou o PR inteiro (undefined). So reconcilia por delta quando ha SHA anterior E ele
+  // difere do atual (houve commit novo desde o ultimo review).
+  it('true quando ha previousSha que difere do sha atual', () => {
+    expect(shouldReconcileByDelta('aaaa111', 'bbbb222')).toBe(true);
+  });
+
+  it('false no 1o review (previousSha null) -> reconcilia o PR inteiro', () => {
+    expect(shouldReconcileByDelta(null, 'bbbb222')).toBe(false);
+  });
+
+  it('false quando o SHA nao mudou (re-run sem commit novo) -> reconcilia tudo', () => {
+    // Mesmo SHA = nada mudou; comparar previousSha contra ele mesmo daria delta vazio
+    // e resolveria todas as threads por engano. Cai no caminho de reconciliar tudo.
+    expect(shouldReconcileByDelta('same777', 'same777')).toBe(false);
   });
 });
 

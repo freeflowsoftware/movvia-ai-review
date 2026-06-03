@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient } from '../lib/github.js';
+import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, changedFilesSince, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient, type CompareClient } from '../lib/github.js';
 
 // resolveOctokitAuth e logica pura de SELECAO de auth (qual credencial usar), sem
 // tocar a rede. A montagem do Octokit (I/O / borda externa) fica em createOctokit,
@@ -165,22 +165,56 @@ describe('listFindingThreads', () => {
 });
 
 describe('resolveReviewThreads', () => {
-  it('chama a mutation resolveReviewThread por threadId', async () => {
+  it('chama a mutation resolveReviewThread por threadId e conta as que resolveram', async () => {
     const gql = new FakeGraphqlClient();
-    await resolveReviewThreads(gql, ['T1', 'T2']);
+    const resolvidas = await resolveReviewThreads(gql, ['T1', 'T2']);
     expect(gql.threadIdsResolvidos).toEqual(['T1', 'T2']);
+    // O retorno e quantas REALMENTE resolveram (fulfilled), nao quantas tentou.
+    expect(resolvidas).toBe(2);
   });
 
-  it('uma mutation que falha NAO derruba as outras (Promise.allSettled)', async () => {
+  it('uma mutation que falha NAO derruba as outras e conta so as que resolveram (allSettled)', async () => {
     // Thread apagada / sem permissao -> uma falha nao pode parar o ciclo de re-review.
+    // O motivo real e logado por thread (nao engolido em silencio); o count exclui a falha.
     const gql = new FakeGraphqlClient([], 'T_FALHA');
-    await expect(resolveReviewThreads(gql, ['T1', 'T_FALHA', 'T3'])).resolves.toBeUndefined();
+    const resolvidas = await resolveReviewThreads(gql, ['T1', 'T_FALHA', 'T3']);
     expect(gql.threadIdsResolvidos).toEqual(['T1', 'T_FALHA', 'T3']);
+    expect(resolvidas).toBe(2); // T1 + T3 resolveram; T_FALHA falhou
   });
 
-  it('lista vazia e no-op (nada a resolver)', async () => {
+  it('lista vazia e no-op (nada a resolver) -> conta 0', async () => {
     const gql = new FakeGraphqlClient();
-    await resolveReviewThreads(gql, []);
+    const resolvidas = await resolveReviewThreads(gql, []);
     expect(gql.threadIdsResolvidos).toEqual([]);
+    expect(resolvidas).toBe(0);
+  });
+});
+
+// Fake nomeado da borda externa (repos.compareCommitsWithBasehead): nao toca a rede.
+// Captura o basehead pedido e devolve uma lista de arquivos pre-montada — alimenta o
+// re-review por delta (so reconciliamos arquivos que o dev mexeu desde o ultimo review).
+class FakeCompareClient implements CompareClient {
+  public ultimoBasehead?: string;
+  constructor(private readonly filenames: string[]) {}
+  repos = {
+    compareCommitsWithBasehead: async (params: { owner: string; repo: string; basehead: string }) => {
+      this.ultimoBasehead = params.basehead;
+      return { data: { files: this.filenames.map((filename) => ({ filename })) } };
+    },
+  };
+}
+
+describe('changedFilesSince', () => {
+  it('compara baseSha...headSha e devolve os filenames do delta', async () => {
+    const fake = new FakeCompareClient(['a.ts', 'b.ts']);
+    const files = await changedFilesSince(fake, target, 'base111', 'head222');
+    expect(files).toEqual(['a.ts', 'b.ts']);
+    // basehead no formato "base...head" exigido pela API de compare do GitHub.
+    expect(fake.ultimoBasehead).toBe('base111...head222');
+  });
+
+  it('delta vazio (nenhum arquivo mudou) -> lista vazia', async () => {
+    const fake = new FakeCompareClient([]);
+    expect(await changedFilesSince(fake, target, 'x', 'y')).toEqual([]);
   });
 });

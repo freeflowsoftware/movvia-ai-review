@@ -157,24 +157,55 @@ export function buildSummary(findings: Finding[], verdict: Verdict, sha: string)
   ].join('\n');
 }
 
+/** Referencia ao resumo NOSSO ja postado: id (para update idempotente) + SHA do ultimo review. */
+export interface SummaryRef {
+  id: number | null;
+  previousSha: string | null;
+}
+
+/**
+ * Logica PURA: acha o resumo NOSSO entre os comentarios top-level do PR e devolve
+ * { id, previousSha }. O `id` reusa o comentario no update idempotente (em vez de
+ * empilhar um novo a cada re-run); o `previousSha` (via parseSummarySha do body) e o
+ * SHA do ultimo review — base do delta do re-review incremental (changedFilesSince).
+ *
+ * previousSha pode ser null mesmo com id setado: resumo de formato antigo sem o marker
+ * de sha -> reusa o id mas cai no caminho de reconciliar o PR inteiro.
+ */
+export function summaryRefFromComments(comments: Array<{ id: number; body?: string }>): SummaryRef {
+  const previo = comments.find((c) => c.body?.includes('<!-- movvia-ai-review:summary'));
+  if (!previo) return { id: null, previousSha: null };
+  return { id: previo.id, previousSha: parseSummarySha(previo.body ?? '') };
+}
+
+/**
+ * Decisao PURA do re-review por delta: so reconcilia restrito aos arquivos do delta
+ * quando ha um SHA anterior E ele difere do atual (houve commit novo desde o ultimo
+ * review). No 1o review (previousSha null) ou re-run sem commit novo (mesmo SHA) cai no
+ * caminho de reconciliar o PR inteiro — comparar um SHA contra ele mesmo daria delta
+ * vazio e resolveria todas as threads por engano.
+ */
+export function shouldReconcileByDelta(previousSha: string | null, sha: string): boolean {
+  return previousSha !== null && previousSha !== sha;
+}
+
 /**
  * Idempotencia do resumo: reusa o comentario top-level ja existente em vez de
- * acumular um novo a cada re-run. Lista os comentarios do PR e devolve o id do
- * primeiro que carrega o summaryMarker (marker invisivel cravado por buildSummary).
+ * acumular um novo a cada re-run. Lista os comentarios do PR e delega a
+ * summaryRefFromComments (pura) a escolha do resumo NOSSO + extracao do SHA anterior.
  */
-async function findExistingSummaryId(
+async function findExistingSummaryRef(
   octokit: { issues: { listComments(p: { owner: string; repo: string; issue_number: number }): Promise<{ data: Array<{ id: number; body?: string }> }> } },
   t: { owner: string; repo: string; prNumber: number },
-): Promise<number | null> {
+): Promise<SummaryRef> {
   const { data } = await octokit.issues.listComments({ owner: t.owner, repo: t.repo, issue_number: t.prNumber });
-  const previo = data.find((c) => c.body?.includes('<!-- movvia-ai-review:summary'));
-  return previo?.id ?? null;
+  return summaryRefFromComments(data);
 }
 
 // --- CLI: post.ts <verdictPath> → posta resumo (idempotente) + inline + check run ---
 if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
-  const { createOctokit, emitCheckRun, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads } = await import('./github.js');
+  const { createOctokit, emitCheckRun, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, changedFilesSince } = await import('./github.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
   const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
@@ -194,22 +225,44 @@ if (process.argv[1]?.endsWith('post.ts')) {
   // Identidade forte = App ou PAT humano (conta para branch protection). Só GITHUB_TOKEN
   // não conta, então o review vira COMMENT e o veredicto real fica no check run.
   const hasReviewIdentity = Boolean(process.env.REVIEW_APP_ID || process.env.REVIEW_PAT);
+  // Octokit dedicado para RESOLVER threads: confirmado em runtime que o GITHUB_TOKEN
+  // nativo do bot NAO resolve review threads (a mutation GraphQL nao tem efeito), so um
+  // PAT/App resolve. Preferimos um PAT (REVIEW_PAT / AI_REVIEW_REPO_TOKEN) e caimos no
+  // App quando configurado; ultimo recurso e o `octokit` ja montado (com GH_TOKEN). `||`
+  // (nao `??`) porque secrets ausentes no Actions chegam como STRING VAZIA, nao undefined.
+  const resolvePat = process.env.REVIEW_PAT || process.env.AI_REVIEW_REPO_TOKEN;
+  const resolveOctokit = resolvePat || process.env.REVIEW_APP_ID
+    ? createOctokit({
+        appId: process.env.REVIEW_APP_ID,
+        privateKey: process.env.REVIEW_APP_PRIVATE_KEY,
+        installationId: process.env.REVIEW_INSTALLATION_ID,
+        pat: resolvePat,
+      })
+    : octokit;
   const pr = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
   const sha = pr.data.head.sha;
   const summary = buildSummary(findings, verdict, sha);
   await emitCheckRun(octokit, { owner, repo, prNumber }, sha, verdict.conclusion, summary);
   // Idempotencia: re-run num mesmo PR atualiza o resumo existente em vez de empilhar
   // um novo a cada commit. Ancora no summaryMarker ja embutido por buildSummary.
-  const existingId = await findExistingSummaryId(octokit, { owner, repo, prNumber });
+  // O previousSha (SHA do ultimo review) sai do mesmo comentario e alimenta o delta.
+  const { id: existingId, previousSha } = await findExistingSummaryRef(octokit, { owner, repo, prNumber });
   if (existingId !== null) {
     await octokit.issues.updateComment({ owner, repo, comment_id: existingId, body: summary });
   } else {
     await octokit.issues.createComment({ owner, repo, issue_number: prNumber, body: summary });
   }
+  // Re-review incremental: se ha SHA anterior diferente do atual, reconcilia SO os
+  // arquivos que o dev mexeu desde o ultimo review (preserva threads dos intocados).
+  // 1o review (ou re-run sem commit novo) -> changedFiles undefined -> reconcilia tudo.
+  const changedFiles = shouldReconcileByDelta(previousSha, sha)
+    ? await changedFilesSince(octokit, { owner, repo, prNumber }, previousSha!, sha)
+    : undefined;
   // Re-review: reconcilia os findings ATUAIS contra as threads inline que JA postamos.
-  // O octokit do Octokit expoe `.graphql`, entao ele mesmo serve de GraphqlClient.
-  const existing = await listFindingThreads(octokit, { owner, repo, prNumber });
-  const { toPost, toResolveThreadIds } = reconcileInline(findings, existing);
+  // listFindingThreads/resolveReviewThreads usam o resolveOctokit (PAT/App) porque o
+  // GITHUB_TOKEN nativo do bot NAO resolve threads (confirmado em runtime).
+  const existing = await listFindingThreads(resolveOctokit, { owner, repo, prNumber });
+  const { toPost, toResolveThreadIds } = reconcileInline(findings, existing, changedFiles);
   // Diferencial do prototipo /revisar-pr: comentarios INLINE na linha exata. Posta
   // SO os novos (toPost) numa unica review ancorada no sha; dedup via findingMarker.
   const inlineComments = buildInlineComments(toPost);
@@ -220,15 +273,19 @@ if (process.argv[1]?.endsWith('post.ts')) {
     await postReview(octokit, { owner, repo, prNumber }, sha, reviewEvent, summary, inlineComments);
   }
   // Fecha as threads cujos findings o dev ja corrigiu (marker sumiu). Idempotente:
-  // resolver thread ja resolvida e no-op; allSettled isola falha por thread.
-  await resolveReviewThreads(octokit, toResolveThreadIds);
+  // resolver thread ja resolvida e no-op; allSettled isola falha por thread. Usa o
+  // resolveOctokit (PAT/App) porque o GITHUB_TOKEN do bot nao resolve threads. O retorno
+  // e quantas REALMENTE resolveram (fulfilled) — o log final reporta esse numero real.
+  const threadsResolvidas = await resolveReviewThreads(resolveOctokit, toResolveThreadIds);
   // O check run (via App) e quem trava o merge; o review formal via PAT do Pablo e
   // best-effort (o App nao pode aprovar o proprio PR de teste -> 422 ignorado).
   if (process.env.REVIEW_PAT) {
     const pat = createOctokit({ pat: process.env.REVIEW_PAT });
     await approveBestEffort(pat, { owner, repo, prNumber }, verdict.event);
   }
+  // Reporta quantas threads REALMENTE resolveram (threadsResolvidas), nao quantas tentou
+  // (toResolveThreadIds.length): se o token nao resolver, o numero real expoe o problema.
   console.log(
-    `Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} novos inline, ${toResolveThreadIds.length} threads resolvidas)`,
+    `Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} novos inline, ${threadsResolvidas}/${toResolveThreadIds.length} threads resolvidas)`,
   );
 }

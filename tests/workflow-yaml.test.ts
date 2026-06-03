@@ -127,6 +127,23 @@ describe('credencial do LLM chega ao realChatRunner em runtime', () => {
   });
 });
 
+// I2: o resolve de threads (resolveReviewThreads/listFindingThreads) precisa de um token
+// que RESOLVE — o GITHUB_TOKEN nativo do bot NAO resolve threads, mas o PAT/App resolve.
+// O step de post deve exportar AI_REVIEW_REPO_TOKEN (PAT) ao ambiente para o CLI montar
+// o resolveOctokit com identidade que resolve.
+describe('o step de post expoe um PAT para o resolve de threads (I2)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  it('o step Postar review exporta AI_REVIEW_REPO_TOKEN ao ambiente', () => {
+    const step = findStep(wf, 'post', 'Postar review');
+    const keys = Object.keys(step.env ?? {});
+    expect(keys).toContain('AI_REVIEW_REPO_TOKEN');
+    expect(String(step.env!.AI_REVIEW_REPO_TOKEN)).toContain('secrets.AI_REVIEW_REPO_TOKEN');
+  });
+});
+
 // Fase 0: todos os jobs do ai-review.yml usam cache de pnpm (pnpm/action-setup +
 // setup-node cache:pnpm) e nenhum reinstala o pnpm global, que invalidaria o cache.
 describe('jobs do ai-review usam cache de pnpm (Fase 0)', () => {

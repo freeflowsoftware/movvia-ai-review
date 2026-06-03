@@ -215,16 +215,74 @@ function parseFindingThread(
 
 /**
  * Borda externa: resolve (fecha) as review threads cujos findings o dev ja corrigiu.
+ * Devolve quantas REALMENTE resolveram (fulfilled) — nao quantas tentou, para o log do
+ * post reportar o numero verdadeiro.
  *
  * IDEMPOTENTE: resolver uma thread ja resolvida e no-op seguro no GitHub, entao re-run
  * num mesmo PR nao quebra. Promise.allSettled para que UMA mutation que falhe (ex:
  * thread apagada, permissao) nao derrube as outras — o ciclo de re-review nao deve
  * parar por causa de uma thread problematica.
+ *
+ * Confirmado em runtime: o GITHUB_TOKEN nativo do bot NAO resolve threads (a mutation
+ * falha silenciosamente), so o PAT/App resolve. Por isso NAO engolimos o reason no
+ * allSettled: logamos o erro real por thread para diagnosticar identidade/permissao.
  */
-export async function resolveReviewThreads(gql: GraphqlClient, threadIds: string[]): Promise<void> {
-  await Promise.allSettled(
-    threadIds.map((threadId) => gql.graphql(RESOLVE_THREAD_MUTATION, { threadId })),
+export async function resolveReviewThreads(gql: GraphqlClient, threadIds: string[]): Promise<number> {
+  const resultados = await Promise.allSettled(
+    threadIds.map((threadId) => resolveOneThread(gql, threadId)),
   );
+  return resultados.filter((r) => r.status === 'fulfilled').length;
+}
+
+/** Resolve UMA thread, logando sucesso/erro real (nunca engolido em silencio). */
+async function resolveOneThread(gql: GraphqlClient, threadId: string): Promise<void> {
+  try {
+    await gql.graphql(RESOLVE_THREAD_MUTATION, { threadId });
+    console.log(`Thread resolvida: ${threadId}`);
+  } catch (e) {
+    // Propaga para o allSettled contar como rejected; o log expoe a causa (ex: token
+    // sem permissao de resolver) em vez de sumir dentro do allSettled.
+    console.error(`Thread NAO resolvida ${threadId}: ${(e as Error).message}`);
+    throw e;
+  }
+}
+
+/** Shape minimo do payload de compareCommitsWithBasehead que changedFilesSince le. */
+interface CompareResponse {
+  data: { files?: Array<{ filename: string }> };
+}
+
+/**
+ * Subconjunto do Octokit que changedFilesSince consome (permite fake nomeado nos testes).
+ * compareCommitsWithBasehead recebe basehead no formato "base...head".
+ */
+export interface CompareClient {
+  repos: {
+    compareCommitsWithBasehead(params: {
+      owner: string;
+      repo: string;
+      basehead: string;
+    }): Promise<CompareResponse>;
+  };
+}
+
+/**
+ * Borda externa: arquivos que mudaram entre baseSha e headSha (o delta do re-review).
+ * Alimenta reconcileInline.changedFiles para reconciliar SO os arquivos tocados desde o
+ * ultimo review — preservando as threads dos arquivos intocados (sem churn resolve+repost).
+ */
+export async function changedFilesSince(
+  octokit: CompareClient,
+  t: PostTarget,
+  baseSha: string,
+  headSha: string,
+): Promise<string[]> {
+  const { data } = await octokit.repos.compareCommitsWithBasehead({
+    owner: t.owner,
+    repo: t.repo,
+    basehead: `${baseSha}...${headSha}`,
+  });
+  return (data.files ?? []).map((f) => f.filename);
 }
 
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */
