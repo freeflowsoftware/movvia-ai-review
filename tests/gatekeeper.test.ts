@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findingId, dedupe, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, type Refuter } from '../lib/gatekeeper.js';
+import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, type Refuter } from '../lib/gatekeeper.js';
 import type { Finding } from '../lib/types.js';
 
 function f(over: Partial<Finding>): Finding {
@@ -70,6 +70,42 @@ describe('dedupe', () => {
     const out = dedupe([f({ category: 'lockfile', severity: 'P0', startLine: 10 }), f({ category: 'lock', severity: 'P1', startLine: 12 })]);
     expect(out).toHaveLength(2);
     expect(out.map((x) => x.severity).sort()).toEqual(['P0', 'P1']);
+  });
+});
+
+describe('dedupeByLine', () => {
+  // O caso-alvo: varios agentes apontam o mesmo problema na mesma linha em
+  // categorias diferentes; o dedupe por (file, category) deixa passar, este corta.
+  it('funde 3 findings de agentes/categorias diferentes na mesma linha mantendo a maior severidade', () => {
+    const out = dedupeByLine([
+      f({ agent: 'seguranca', category: 'any', severity: 'P2', startLine: 15, endLine: 15 }),
+      f({ agent: 'arquitetura', category: 'tipo', severity: 'P0', startLine: 15, endLine: 15 }),
+      f({ agent: 'regressao', category: 'lint', severity: 'P1', startLine: 15, endLine: 15 }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.severity).toBe('P0');
+  });
+  it('preserva findings em linhas diferentes (gap > 1)', () => {
+    const out = dedupeByLine([f({ endLine: 10 }), f({ endLine: 20 })]);
+    expect(out).toHaveLength(2);
+  });
+  it('funde dentro da janela +-1 (endLine 14 e 15) e separa gap > 1 (15 e 17)', () => {
+    const out = dedupeByLine([
+      f({ category: 'a', severity: 'P1', endLine: 14 }),
+      f({ category: 'b', severity: 'P0', endLine: 15 }),
+      f({ category: 'c', severity: 'P2', endLine: 17 }),
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.map((x) => x.severity).sort()).toEqual(['P0', 'P2']);
+  });
+  // Empate de severidade mantem o PRIMEIRO da ordem de entrada (sort estavel por index).
+  it('em empate de severidade mantem o primeiro da ordem de entrada', () => {
+    const out = dedupeByLine([
+      f({ agent: 'primeiro', severity: 'P1', endLine: 15 }),
+      f({ agent: 'segundo', severity: 'P1', endLine: 15 }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.agent).toBe('primeiro');
   });
 });
 
