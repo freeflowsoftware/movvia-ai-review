@@ -3,7 +3,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, type Refuter } from '../lib/gatekeeper.js';
+import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, type Refuter } from '../lib/gatekeeper.js';
+import type { ChatRunner } from '../lib/run-agent.js';
 import type { Finding } from '../lib/types.js';
 
 function f(over: Partial<Finding>): Finding {
@@ -28,6 +29,25 @@ class RefuterQueFalhaEm {
         throw new Error(`refuter timeout para categoria ${finding.category}`);
       }
       return { refuted: false, score: 9 };
+    };
+  }
+}
+
+/**
+ * Fake nomeado do ChatRunner do consolidador (borda externa: simula o LLM melhor).
+ * Devolve sempre o JSON cru passado no construtor, contando quantas vezes foi chamado —
+ * assim o teste do caso "<=1 finding" pode afirmar que o LLM NAO foi invocado.
+ * Uso: new ConsolidadorFake('{"findings":[]}')
+ */
+class ConsolidadorFake {
+  chamadas = 0;
+
+  constructor(private readonly respostaJson: string) {}
+
+  asRunner(): ChatRunner {
+    return async () => {
+      this.chamadas += 1;
+      return this.respostaJson;
     };
   }
 }
@@ -140,6 +160,37 @@ describe('runAdversarial', () => {
       0.8,
     );
     expect(out.map((x) => x.category).sort()).toEqual(['ok', 'quebra']);
+  });
+});
+
+describe('consolidateFindings', () => {
+  const MODELO = 'deepseek/deepseek-v4-flash';
+
+  it('retorna o subset que o consolidador devolveu (fusao semantica)', async () => {
+    const entrada = [f({ category: 'a', title: 'dup A' }), f({ category: 'b', title: 'dup B' })];
+    // O consolidador funde os dois num unico finding real.
+    const fundido = JSON.stringify({ findings: [f({ category: 'a', title: 'dup A' })] });
+    const fake = new ConsolidadorFake(fundido);
+    const out = await consolidateFindings(entrada, fake.asRunner(), MODELO);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.title).toBe('dup A');
+  });
+
+  // Fallback robusto: o consolidador devolveu vazio (modelo cortou/falhou) mas a entrada
+  // tinha findings — jamais descartamos achados reais por erro do passo extra.
+  it('cai no fallback (retorna a entrada original) quando o consolidador devolve vazio', async () => {
+    const entrada = [f({ category: 'a' }), f({ category: 'b' })];
+    const fake = new ConsolidadorFake('{"findings":[]}');
+    const out = await consolidateFindings(entrada, fake.asRunner(), MODELO);
+    expect(out).toEqual(entrada);
+  });
+
+  // Com <=1 finding nao ha o que fundir: pulamos a chamada ao LLM (economia).
+  it('com 1 finding retorna sem chamar o runner', async () => {
+    const fake = new ConsolidadorFake('{"findings":[]}');
+    const out = await consolidateFindings([f({})], fake.asRunner(), MODELO);
+    expect(out).toHaveLength(1);
+    expect(fake.chamadas).toBe(0);
   });
 });
 
