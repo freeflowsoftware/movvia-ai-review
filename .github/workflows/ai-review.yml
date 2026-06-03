@@ -87,8 +87,53 @@ jobs:
       - run: pnpm install --frozen-lockfile --prefer-offline
       - id: set
         run: echo "matrix=$(npx tsx lib/discover.ts ${{ inputs.agents_dir }})" >> "$GITHUB_OUTPUT"
-  review:
+  # Fase 1c: gera o context-pack determinístico (lib/context-pack.ts) UMA vez por PR e o publica
+  # como artefato. Roda em job proprio (nao na matrix de review) para nao recalcular o pack N
+  # vezes — todos os agentes da matrix consomem o mesmo artefato baixado no job review.
+  context-pack:
     needs: discover
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # Checkout do repo ALVO no cwd com fetch-depth:0: o context-pack le arquivos inteiros,
+      # irmaos e imports do codebase real (nao so o diff), entao precisa da arvore completa.
+      - name: Checkout repo alvo
+        uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Checkout central
+        uses: actions/checkout@v4
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          path: _review
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # As deps deste job vem do checkout central em _review (o checkout alvo no cwd nao tem
+      # o lockfile do review), por isso cacheamos _review/pnpm-lock.yaml (padrao Fase 0).
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: _review/pnpm-lock.yaml
+      - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
+      - name: Capturar diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # O checkout no cwd e o repo ALVO, mas o `gh` resolve o repo pelo remote do cwd;
+          # forcamos github.repository (o caller) para o `gh pr diff` apontar pro PR certo.
+          GH_REPO: ${{ github.repository }}
+        run: gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+      - name: Gerar context-pack
+        # context-pack-cli.ts <repoDir> <diffPath> → ContextPack JSON em stdout. repoDir e o
+        # workspace do checkout alvo; o CLI le defaults.yml do central (import.meta.dirname).
+        run: npx tsx _review/lib/context-pack-cli.ts "$GITHUB_WORKSPACE" /tmp/pr.diff > context-pack.json
+      - uses: actions/upload-artifact@v4
+        with: { name: context-pack, path: context-pack.json }
+  review:
+    needs: [discover, context-pack]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -116,6 +161,10 @@ jobs:
       - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
       # Sem install do opencode: o agente faz chat-completion direta via fetch nativo
       # (realChatRunner), nao o binario opencode. O install ficaria morto.
+      # Fase 1c: baixa o context-pack gerado uma vez no job context-pack. loadContextPack
+      # (agent-runner-cli) filtra so as secoes dos arquivos que ESTE agente revisa.
+      - uses: actions/download-artifact@v4
+        with: { name: context-pack, path: /tmp/context-pack }
       - name: Capturar diff e titulo
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,7 +188,7 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           export PR_TITLE="$(cat /tmp/pr-title.txt)"
-          cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff > "/tmp/findings-${AGENT_NAME}.json"
+          cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff /tmp/context-pack/context-pack.json > "/tmp/findings-${AGENT_NAME}.json"
       - uses: actions/upload-artifact@v4
         with: { name: "findings-${{ matrix.name }}", path: "/tmp/findings-${{ matrix.name }}.json" }
   gatekeeper:

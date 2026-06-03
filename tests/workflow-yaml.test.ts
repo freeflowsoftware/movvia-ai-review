@@ -40,10 +40,26 @@ interface WorkflowStep {
   env?: Record<string, unknown>;
 }
 interface WorkflowJob {
+  needs?: string | string[];
   steps?: WorkflowStep[];
 }
 interface Workflow {
   jobs?: Record<string, WorkflowJob>;
+}
+
+// `needs` aceita string unica ou lista no YAML do Actions; normaliza para array para os asserts.
+function jobNeeds(wf: Workflow, jobId: string): string[] {
+  const needs = wf.jobs?.[jobId]?.needs;
+  if (!needs) return [];
+  return Array.isArray(needs) ? needs : [needs];
+}
+
+// Procura um step do job que use `actions/<up|down>load-artifact` com `with.name` esperado.
+function hasArtifactStep(wf: Workflow, jobId: string, action: string, name: string): boolean {
+  const steps = wf.jobs?.[jobId]?.steps ?? [];
+  return steps.some(
+    (s) => (s.uses ?? '').includes(action) && String(s.with?.name ?? '') === name,
+  );
 }
 
 // Fase 0: o setup de cada job deixa de instalar o pnpm via `npm i -g pnpm@9` (50-70s)
@@ -126,7 +142,7 @@ describe('jobs do ai-review usam cache de pnpm (Fase 0)', () => {
     readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
   ) as Workflow;
 
-  const jobIds = ['gates', 'discover', 'review', 'gatekeeper', 'post'];
+  const jobIds = ['gates', 'discover', 'context-pack', 'review', 'gatekeeper', 'post'];
 
   for (const jobId of jobIds) {
     it(`o job ${jobId} usa pnpm/action-setup + cache:pnpm`, () => {
@@ -207,5 +223,54 @@ describe('caller-template tem guard de fork no gatilho issue_comment', () => {
   it('mantem o branch pull_request normal', () => {
     const condition = caller.jobs?.call?.if ?? '';
     expect(condition).toContain("github.event_name == 'pull_request'");
+  });
+});
+
+// Fase 1c: o job `context-pack` roda o context-pack-cli no repo alvo e publica o pack como
+// artefato; o job `review` passa a depender dele, baixa o artefato e o repassa ao agente.
+// Estes asserts travam a fiacao do pack determinístico no pipeline (sem eles o pack fica
+// gerado mas nunca chega ao prompt do agente).
+describe('job context-pack alimenta o review (Fase 1c)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  it('o job context-pack existe e depende do discover', () => {
+    expect(wf.jobs?.['context-pack']).toBeDefined();
+    expect(jobNeeds(wf, 'context-pack')).toContain('discover');
+  });
+
+  it('o job context-pack roda o context-pack-cli a partir do checkout central', () => {
+    const step = findStep(wf, 'context-pack', 'context-pack');
+    expect(step.run ?? '').toContain('_review/lib/context-pack-cli.ts');
+    expect(step.run ?? '').toContain('"$GITHUB_WORKSPACE"');
+  });
+
+  it('o job context-pack captura o diff forcando o repo alvo (GH_REPO)', () => {
+    const step = findStep(wf, 'context-pack', 'Capturar diff');
+    expect(String(step.env?.GH_REPO ?? '')).toContain('github.repository');
+  });
+
+  it('o job context-pack publica o artefato context-pack', () => {
+    expect(hasArtifactStep(wf, 'context-pack', 'upload-artifact', 'context-pack')).toBe(true);
+  });
+
+  it('o job review depende de discover E context-pack', () => {
+    const needs = jobNeeds(wf, 'review');
+    expect(needs).toContain('discover');
+    expect(needs).toContain('context-pack');
+  });
+
+  it('o job review baixa o artefato context-pack', () => {
+    expect(hasArtifactStep(wf, 'review', 'download-artifact', 'context-pack')).toBe(true);
+  });
+
+  it('o step de review passa o caminho do pack como 4o argumento ao agent-runner-cli', () => {
+    const step = findStep(wf, 'review', 'Rodar agente');
+    const run = step.run ?? '';
+    expect(run).toContain('agent-runner-cli.ts');
+    // 4o argv: <agentName> <repoDir> <diffPath> <packPath>. O caminho do pack baixado
+    // deve aparecer depois de /tmp/pr.diff na linha de invocacao.
+    expect(run).toMatch(/agent-runner-cli\.ts.*\/tmp\/pr\.diff.*context-pack\.json/s);
   });
 });
