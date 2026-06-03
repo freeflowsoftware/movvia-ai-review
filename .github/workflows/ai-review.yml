@@ -213,6 +213,11 @@ jobs:
       # fetch nativo (realChatRunner), nao o binario opencode.
       - uses: actions/download-artifact@v4
         with: { path: /tmp/findings, pattern: "findings-*", merge-multiple: true }
+      # Fase 2: baixa o context-pack (gerado uma vez no job context-pack) para o refuter
+      # adversarial refutar com base factual — por finding, extrai o trecho do arquivo
+      # (loadContextPack) e injeta no prompt do cetico. O 3o argv do gatekeeper.ts e o pack.
+      - uses: actions/download-artifact@v4
+        with: { name: context-pack, path: /tmp/context-pack }
       - name: Capturar diff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -231,7 +236,7 @@ jobs:
           # DEDUP_MODEL: modelo melhor para a consolidacao semantica final (consolidateFindings
           # em lib/gatekeeper.ts). Sobrescreve o default deepseek/deepseek-v4-flash do codigo.
           DEDUP_MODEL: deepseek/deepseek-v4-flash
-        run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff > /tmp/verdict.json
+        run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff /tmp/context-pack/context-pack.json > /tmp/verdict.json
       - uses: actions/upload-artifact@v4
         with: { name: verdict, path: /tmp/verdict.json }
   post:

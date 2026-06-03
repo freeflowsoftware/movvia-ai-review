@@ -274,3 +274,25 @@ describe('job context-pack alimenta o review (Fase 1c)', () => {
     expect(run).toMatch(/agent-runner-cli\.ts.*\/tmp\/pr\.diff.*context-pack\.json/s);
   });
 });
+
+// Fase 2: o refuter adversarial do gatekeeper passa a ser context-aware. O job gatekeeper
+// baixa o artefato context-pack e repassa o caminho ao gatekeeper.ts (3o argv). Sem esta
+// fiacao o pack seria gerado mas nunca chegaria ao prompt do cetico (refuta no escuro).
+describe('context-pack alimenta o refuter do gatekeeper (Fase 2)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  it('o job gatekeeper baixa o artefato context-pack', () => {
+    expect(hasArtifactStep(wf, 'gatekeeper', 'download-artifact', 'context-pack')).toBe(true);
+  });
+
+  it('o step Consolidar passa o caminho do pack como 3o argumento ao gatekeeper.ts', () => {
+    const step = findStep(wf, 'gatekeeper', 'Consolidar');
+    const run = step.run ?? '';
+    expect(run).toContain('gatekeeper.ts');
+    // 3o argv: <findingsDir> <diffPath> <packPath>. O caminho do pack baixado deve aparecer
+    // depois de /tmp/pr.diff na linha de invocacao.
+    expect(run).toMatch(/gatekeeper\.ts.*\/tmp\/pr\.diff.*context-pack\.json/s);
+  });
+});

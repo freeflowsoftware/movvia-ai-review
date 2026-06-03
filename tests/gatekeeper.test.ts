@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, type Refuter } from '../lib/gatekeeper.js';
+import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, buildRefuteUserPrompt, buildRefuter, type Refuter } from '../lib/gatekeeper.js';
 import type { ChatRunner } from '../lib/run-agent.js';
 import type { Finding } from '../lib/types.js';
 
@@ -134,6 +134,61 @@ describe('filterByCite', () => {
     const added = new Map([['a.ts', new Set([10, 11, 12])]]);
     const out = filterByCite([f({ cite: 'a.ts:10-12' }), f({ cite: 'a.ts:99-100' })], added);
     expect(out).toHaveLength(1);
+  });
+});
+
+describe('buildRefuteUserPrompt', () => {
+  // O cetico refuta com base FACTUAL: quando o context-pack traz o trecho do arquivo do
+  // finding, ele entra no prompt para o refutador confirmar se o "ausente" ja segue o padrao.
+  it('injeta o trecho do codebase quando fornecido', () => {
+    const prompt = buildRefuteUserPrompt(f({ file: 'conta.service.ts' }), 'class ContaService { valida() {} }');
+    expect(prompt).toContain('Contexto do codebase do arquivo:');
+    expect(prompt).toContain('class ContaService { valida() {} }');
+  });
+  // Retrocompat: sem excerpt o prompt continua identico ao anterior (sem a secao de contexto),
+  // para nao quebrar callers/testes legados nem poluir o prompt em PRs sem context-pack.
+  it('omite a secao de contexto quando o excerpt nao e fornecido', () => {
+    const prompt = buildRefuteUserPrompt(f({ file: 'conta.service.ts' }));
+    expect(prompt).not.toContain('Contexto do codebase do arquivo:');
+    expect(prompt).toContain('Arquivo: conta.service.ts');
+  });
+  // Excerpt vazio (arquivo sem secao no pack) tambem omite — string vazia nao e "ausencia".
+  it('omite a secao de contexto quando o excerpt e vazio', () => {
+    const prompt = buildRefuteUserPrompt(f({}), '');
+    expect(prompt).not.toContain('Contexto do codebase do arquivo:');
+  });
+});
+
+describe('buildRefuter (context-aware)', () => {
+  /**
+   * Fake nomeado do ChatRunner: captura o ultimo USER prompt recebido para o teste
+   * inspecionar se o excerpt do arquivo do finding foi de fato injetado.
+   */
+  class ChatRunnerEspiao {
+    ultimoUser = '';
+    asRunner(): ChatRunner {
+      return async (_model, _system, user) => {
+        this.ultimoUser = user;
+        return '{"refuted":false,"score":9}';
+      };
+    }
+  }
+
+  it('passa ao prompt o excerpt do pack correspondente ao file do finding', async () => {
+    const espiao = new ChatRunnerEspiao();
+    // Provider de excerpt injetado (DIP): so o arquivo do finding resolve um trecho.
+    const excerptFor = (file: string): string => (file === 'a.ts' ? 'EXCERPT DE a.ts' : '');
+    const refute = buildRefuter(espiao.asRunner(), 'modelo-x', excerptFor);
+    await refute(f({ file: 'a.ts' }));
+    expect(espiao.ultimoUser).toContain('Contexto do codebase do arquivo:');
+    expect(espiao.ultimoUser).toContain('EXCERPT DE a.ts');
+  });
+
+  it('sem provider de excerpt mantem o prompt sem a secao de contexto (retrocompat)', async () => {
+    const espiao = new ChatRunnerEspiao();
+    const refute = buildRefuter(espiao.asRunner(), 'modelo-x');
+    await refute(f({ file: 'a.ts' }));
+    expect(espiao.ultimoUser).not.toContain('Contexto do codebase do arquivo:');
   });
 });
 
