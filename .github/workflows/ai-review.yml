@@ -38,9 +38,17 @@ jobs:
           ref: v1
           path: _review
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # pnpm/action-setup ANTES do setup-node: o cache do setup-node precisa do pnpm
+      # ja no PATH para resolver o store. cache-dependency-path aponta para o lockfile
+      # do checkout central (_review), que e quem tem as deps deste job.
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: cd _review && npm i -g pnpm@9 && pnpm install --prod=false
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: _review/pnpm-lock.yaml
+      - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
       - name: Gate Jira
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,9 +75,16 @@ jobs:
           repository: freeflowsoftware/movvia-ai-review
           ref: v1
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # Checkout do central NO CWD: o lockfile com as deps fica na raiz, entao
+      # cache-dependency-path e o pnpm install rodam no cwd (sem cd _review).
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm i -g pnpm@9 && pnpm install
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --prefer-offline
       - id: set
         run: echo "matrix=$(npx tsx lib/discover.ts ${{ inputs.agents_dir }})" >> "$GITHUB_OUTPUT"
   review:
@@ -89,9 +104,16 @@ jobs:
           ref: v1
           path: _review
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # As deps deste job vem do checkout central em _review (o checkout alvo no cwd
+      # nao tem o lockfile do review), por isso cacheamos _review/pnpm-lock.yaml.
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: cd _review && npm i -g pnpm@9 && pnpm install
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: _review/pnpm-lock.yaml
+      - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
       # Sem install do opencode: o agente faz chat-completion direta via fetch nativo
       # (realChatRunner), nao o binario opencode. O install ficaria morto.
       - name: Capturar diff e titulo
@@ -129,9 +151,15 @@ jobs:
           repository: freeflowsoftware/movvia-ai-review
           ref: v1
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # Checkout do central NO CWD: lockfile na raiz, cache e install no cwd.
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm i -g pnpm@9 && pnpm install
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --prefer-offline
       # Sem install do opencode aqui: a etapa adversarial usa chat-completion direta via
       # fetch nativo (realChatRunner), nao o binario opencode.
       - uses: actions/download-artifact@v4
@@ -166,9 +194,15 @@ jobs:
           repository: freeflowsoftware/movvia-ai-review
           ref: v1
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # Checkout do central NO CWD: lockfile na raiz, cache e install no cwd.
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm i -g pnpm@9 && pnpm install
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --prefer-offline
       - uses: actions/download-artifact@v4
         with: { name: verdict, path: /tmp }
       - name: Postar review + check run

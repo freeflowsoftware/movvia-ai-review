@@ -7,9 +7,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Self-test roda no proprio repo: o lockfile fica na raiz, entao cacheamos
+      # pnpm-lock.yaml e instalamos no cwd. pnpm/action-setup vem antes do setup-node.
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm i -g pnpm@9 && pnpm install
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Lint de tipos
         run: npx tsc --noEmit
       - name: Validar agentes

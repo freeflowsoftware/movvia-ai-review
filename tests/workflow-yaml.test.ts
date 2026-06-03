@@ -35,6 +35,8 @@ describe('YAMLs do projeto parseiam sob YAML 1.2 estrito', () => {
 interface WorkflowStep {
   name?: string;
   run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
   env?: Record<string, unknown>;
 }
 interface WorkflowJob {
@@ -42,6 +44,23 @@ interface WorkflowJob {
 }
 interface Workflow {
   jobs?: Record<string, WorkflowJob>;
+}
+
+// Fase 0: o setup de cada job deixa de instalar o pnpm via `npm i -g pnpm@9` (50-70s)
+// e passa a usar o cache do pnpm (pnpm/action-setup + actions/setup-node com cache:pnpm),
+// derrubando ~3min do tempo total. Este helper prova que o job esta cacheado.
+function jobUsesPnpmCache(wf: Workflow, jobId: string): boolean {
+  const steps = wf.jobs?.[jobId]?.steps ?? [];
+  const hasActionSetup = steps.some((s) => (s.uses ?? '').includes('pnpm/action-setup'));
+  const hasNodeCache = steps.some((s) => String(s.with?.cache ?? '') === 'pnpm');
+  return hasActionSetup && hasNodeCache;
+}
+
+// Apos a Fase 0 nenhum job pode mais instalar o pnpm global: o `npm i -g pnpm` derrota
+// o cache (reinstala a cada run). A ausencia desse comando trava a regressao.
+function jobInstallsPnpmGlobally(wf: Workflow, jobId: string): boolean {
+  const steps = wf.jobs?.[jobId]?.steps ?? [];
+  return steps.some((s) => /npm i -g pnpm/.test(s.run ?? ''));
 }
 
 function findStep(wf: Workflow, jobId: string, namePart: string): WorkflowStep {
@@ -97,6 +116,41 @@ describe('credencial do LLM chega ao realChatRunner em runtime', () => {
     const steps = wf.jobs?.gatekeeper?.steps ?? [];
     const installs = steps.some((s) => (s.run ?? '').includes('opencode-ai'));
     expect(installs).toBe(false);
+  });
+});
+
+// Fase 0: todos os jobs do ai-review.yml usam cache de pnpm (pnpm/action-setup +
+// setup-node cache:pnpm) e nenhum reinstala o pnpm global, que invalidaria o cache.
+describe('jobs do ai-review usam cache de pnpm (Fase 0)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  const jobIds = ['gates', 'discover', 'review', 'gatekeeper', 'post'];
+
+  for (const jobId of jobIds) {
+    it(`o job ${jobId} usa pnpm/action-setup + cache:pnpm`, () => {
+      expect(jobUsesPnpmCache(wf, jobId)).toBe(true);
+    });
+
+    it(`o job ${jobId} NAO reinstala o pnpm global (derrotaria o cache)`, () => {
+      expect(jobInstallsPnpmGlobally(wf, jobId)).toBe(false);
+    });
+  }
+});
+
+// Fase 0: o self-test (que roda no proprio repo) tambem migra para o cache de pnpm.
+describe('self-test usa cache de pnpm (Fase 0)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/self-test.yml'), 'utf8'),
+  ) as Workflow;
+
+  it('o job test usa pnpm/action-setup + cache:pnpm', () => {
+    expect(jobUsesPnpmCache(wf, 'test')).toBe(true);
+  });
+
+  it('o job test NAO reinstala o pnpm global', () => {
+    expect(jobInstallsPnpmGlobally(wf, 'test')).toBe(false);
   });
 });
 
