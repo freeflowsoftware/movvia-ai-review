@@ -1,0 +1,26 @@
+name: Auto-move tag v1
+# Mantem a tag flutuante `v1` sempre no HEAD da main. Os callers nos repos pe-* usam
+# `@v1`; assim, todo push na main (merge de PR) faz os PROXIMOS PRs dos repos alvo
+# puxarem a versao nova automaticamente — sem ninguem precisar mover a tag a mao.
+# A indireção `v1` e preservada: se um dia for preciso segurar uma versao estavel ou
+# introduzir um `v2` breaking, basta desligar este workflow ou apontar para outra tag.
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+concurrency:
+  group: auto-tag-v1
+  cancel-in-progress: true
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Mover v1 para o HEAD da main
+        run: |
+          git tag -f v1
+          git push -f origin v1
+          echo "v1 -> $(git rev-parse --short HEAD)"
