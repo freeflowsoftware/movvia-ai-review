@@ -49,11 +49,17 @@ export interface InlineComment {
  *
  * `path` existe para o re-review por delta: so reconciliamos threads de arquivos que
  * o dev mexeu desde o ultimo review, preservando as demais (sem churn de resolve+repost).
+ *
+ * `isOutdated` (GitHub marca true quando a LINHA que a thread ancora mudou desde que
+ * postamos) e o gate de resolucao: so fechamos uma thread se o dev MEXEU na linha do
+ * finding — nunca por o modelo nao-deterministico ter deixado de re-gerar o marker num
+ * re-review. Sem isso um P0 fecharia sozinho com o codigo vulneravel intacto.
  */
 export interface ExistingThread {
   marker: string;
   threadId: string;
   path: string;
+  isOutdated: boolean;
 }
 
 /** Arquivo de um finding: o cite JA validado contra o diff vence; file cru e fallback. */
@@ -92,7 +98,7 @@ export function reconcileInline(
   return reconcileScope(findingsNoDelta, threadsNoDelta);
 }
 
-/** Regra base novo->post / sumido->resolve / persiste->nada sobre um escopo ja filtrado. */
+/** Regra base novo->post / sumido+outdated->resolve / persiste|vivo->nada sobre escopo ja filtrado. */
 function reconcileScope(
   findings: Finding[],
   existing: ExistingThread[],
@@ -100,8 +106,13 @@ function reconcileScope(
   const markersExistentes = new Set(existing.map((t) => t.marker));
   const markersAtuais = new Set(findings.map(findingMarker));
   const toPost = findings.filter((f) => !markersExistentes.has(findingMarker(f)));
+  // RESOLVE exige DUAS condicoes: o marker sumiu dos findings atuais E a thread esta
+  // outdated (o dev mexeu na linha). So o marker sumir nao basta — o modelo e
+  // nao-deterministico e re-gera markers diferentes a cada run, entao um finding ainda
+  // vivo no codigo "some" sem o dev ter corrigido nada. Exigir outdated garante que um
+  // P0 so feche quando a linha que o originou de fato mudou.
   const toResolveThreadIds = existing
-    .filter((t) => !markersAtuais.has(t.marker))
+    .filter((t) => !markersAtuais.has(t.marker) && t.isOutdated)
     .map((t) => t.threadId);
   return { toPost, toResolveThreadIds };
 }

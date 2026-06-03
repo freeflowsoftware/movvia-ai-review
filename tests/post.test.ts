@@ -148,10 +148,11 @@ describe('reconcileInline', () => {
       category, title: 't', rationale: 'r', suggestion: 's', cite: `${file}:10-12`,
     };
   }
-  // Helper: simula uma thread inline NOSSA ja postada (marker + id + arquivo da thread).
-  // O `path` deriva do cite do finding (o arquivo onde o comentario ancorou).
-  function existingFor(f: Finding, threadId: string): ExistingThread {
-    return { marker: findingMarker(f), threadId, path: f.file };
+  // Helper: simula uma thread inline NOSSA ja postada (marker + id + arquivo + outdated).
+  // O `path` deriva do cite do finding (o arquivo onde o comentario ancorou). `isOutdated`
+  // = a linha que a thread ancora mudou no codigo desde que postamos (GitHub marca assim).
+  function existingFor(f: Finding, threadId: string, isOutdated: boolean): ExistingThread {
+    return { marker: findingMarker(f), threadId, path: f.file, isOutdated };
   }
 
   it('(a) finding novo (sem thread) entra em toPost', () => {
@@ -165,33 +166,53 @@ describe('reconcileInline', () => {
     const persistente = makeFinding('persiste.ts', 'cred');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [persistente],
-      [existingFor(persistente, 'T1')],
+      [existingFor(persistente, 'T1', false)],
     );
     // Marker em ambos -> nem re-posta (dedup) nem resolve (continua pendente).
     expect(toPost).toEqual([]);
     expect(toResolveThreadIds).toEqual([]);
   });
 
-  it('(c) marker existente que sumiu dos findings -> threadId em toResolve', () => {
-    // O dev corrigiu o problema: o finding desapareceu, entao a thread fecha.
+  it('(c) marker sumiu E thread outdated (dev mexeu na linha) -> threadId em toResolve', () => {
+    // O dev mexeu na linha (thread outdated) E o finding sumiu -> corrigiu -> fecha.
     const corrigido = makeFinding('corrigido.ts', 'cred');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [],
-      [existingFor(corrigido, 'T9')],
+      [existingFor(corrigido, 'T9', true)],
     );
     expect(toPost).toEqual([]);
     expect(toResolveThreadIds).toEqual(['T9']);
   });
 
-  it('(d) caso misto: novo posta, persistente fica, corrigido resolve', () => {
+  it('(c2) marker sumiu MAS thread NAO outdated (linha intacta) -> PRESERVA, nao resolve', () => {
+    // FURO DE SEGURANCA FECHADO: o modelo nao-deterministico re-gera markers diferentes,
+    // entao o marker "some" mesmo com o problema ainda no codigo. Se a LINHA nao mudou
+    // (thread nao outdated), o problema continua la -> NAO resolver. Um P0 nunca fecha
+    // sozinho sem o dev tocar no codigo que o originou.
+    const naoCorrigido = makeFinding('vulneravel.ts', 'cred');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [],
+      [existingFor(naoCorrigido, 'T-VIVO', false)],
+    );
+    expect(toPost).toEqual([]);
+    expect(toResolveThreadIds).toEqual([]);
+  });
+
+  it('(d) caso misto: novo posta, persistente fica, corrigido(outdated) resolve, vivo(intacto) preserva', () => {
     const persistente = makeFinding('persiste.ts', 'cred');
     const corrigido = makeFinding('corrigido.ts', 'perf');
+    const naoCorrigido = makeFinding('vivo.ts', 'cred');
     const novo = makeFinding('novo.ts', 'lock');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [persistente, novo],
-      [existingFor(persistente, 'T1'), existingFor(corrigido, 'T2')],
+      [
+        existingFor(persistente, 'T1', false),
+        existingFor(corrigido, 'T2', true),
+        existingFor(naoCorrigido, 'T3', false),
+      ],
     );
     expect(toPost).toEqual([novo]);
+    // So T2 resolve (outdated); T3 preservada (marker sumiu mas linha intacta -> vivo).
     expect(toResolveThreadIds).toEqual(['T2']);
   });
 });
@@ -206,8 +227,8 @@ describe('reconcileInline por delta de arquivos (re-review incremental)', () => 
       category, title: 't', rationale: 'r', suggestion: 's', cite: `${file}:10-12`,
     };
   }
-  function existingFor(f: Finding, threadId: string): ExistingThread {
-    return { marker: findingMarker(f), threadId, path: f.file };
+  function existingFor(f: Finding, threadId: string, isOutdated: boolean): ExistingThread {
+    return { marker: findingMarker(f), threadId, path: f.file, isOutdated };
   }
 
   it('sem changedFiles (1o review) reconcilia tudo, igual ao comportamento atual', () => {
@@ -216,7 +237,7 @@ describe('reconcileInline por delta de arquivos (re-review incremental)', () => 
     const corrigido = makeFinding('corrigido.ts', 'perf');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [novo],
-      [existingFor(corrigido, 'T2')],
+      [existingFor(corrigido, 'T2', true)],
       undefined,
     );
     expect(toPost).toEqual([novo]);
@@ -230,23 +251,40 @@ describe('reconcileInline por delta de arquivos (re-review incremental)', () => 
     const intocadoThread = makeFinding('intocado.ts', 'perf');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [intocadoNovo],
-      [existingFor(intocadoThread, 'T-INTOCADO')],
+      [existingFor(intocadoThread, 'T-INTOCADO', true)], // outdated, mas FORA do delta
       ['outro.ts'], // delta nao inclui intocado.ts
     );
     expect(toPost).toEqual([]);
     expect(toResolveThreadIds).toEqual([]);
   });
 
-  it('arquivo NO delta reconcilia normal: novo posta, sumido resolve', () => {
+  it('arquivo NO delta + thread outdated: novo posta, sumido(outdated) resolve', () => {
     const novoNoDelta = makeFinding('mexido.ts', 'cred');
     const sumidoNoDelta = makeFinding('mexido.ts', 'perf');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [novoNoDelta],
-      [existingFor(sumidoNoDelta, 'T-MEXIDO')],
+      [existingFor(sumidoNoDelta, 'T-MEXIDO', true)], // dev mexeu na linha
       ['mexido.ts'], // delta inclui mexido.ts
     );
     expect(toPost).toEqual([novoNoDelta]);
     expect(toResolveThreadIds).toEqual(['T-MEXIDO']);
+  });
+
+  it('arquivo NO delta MAS thread NAO outdated (linha intacta) -> PRESERVA, nao resolve', () => {
+    // FURO FECHADO no nivel do delta: o dev mexeu NO ARQUIVO mas NAO na linha do finding.
+    // O re-review re-gera markers diferentes -> marker "some" -> antes resolvia por engano.
+    // Agora: linha intacta = problema vivo = preserva. Ex real: corrigi dead code na linha
+    // 204 do service mas o cross-tenant P0 na linha 146 do MESMO arquivo segue intacto.
+    const corrigidoNoDelta = makeFinding('service.ts', 'perf');
+    const vivoNoDelta = makeFinding('service.ts', 'cred'); // mesmo arquivo, linha intacta
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [],
+      [existingFor(corrigidoNoDelta, 'T-CORRIGIDO', true), existingFor(vivoNoDelta, 'T-VIVO', false)],
+      ['service.ts'],
+    );
+    expect(toPost).toEqual([]);
+    // So o outdated resolve; o de linha intacta (P0 vivo) e preservado.
+    expect(toResolveThreadIds).toEqual(['T-CORRIGIDO']);
   });
 
   it('delta misto: reconcilia os do delta e preserva os de fora simultaneamente', () => {
@@ -256,12 +294,12 @@ describe('reconcileInline por delta de arquivos (re-review incremental)', () => 
     const threadForaDelta = makeFinding('intocado.ts', 'lock');
     const { toPost, toResolveThreadIds } = reconcileInline(
       [novoNoDelta, persistenteForaDelta],
-      [existingFor(threadSumidaNoDelta, 'T-SUMIDA'), existingFor(threadForaDelta, 'T-FORA')],
+      [existingFor(threadSumidaNoDelta, 'T-SUMIDA', true), existingFor(threadForaDelta, 'T-FORA', true)],
       ['mexido.ts'],
     );
     // novo do delta posta; fora do delta nao posta (preservado).
     expect(toPost).toEqual([novoNoDelta]);
-    // thread sumida do delta resolve; thread de fora preservada.
+    // thread sumida do delta (outdated) resolve; thread de fora preservada.
     expect(toResolveThreadIds).toEqual(['T-SUMIDA']);
   });
 

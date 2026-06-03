@@ -141,24 +141,28 @@ interface ReviewThreadNode {
   isResolved: boolean;
   // path do arquivo onde a thread ancorou — alimenta o re-review por delta.
   path: string;
+  // isOutdated = a linha que a thread ancora mudou desde que postamos. Criterio de
+  // resolve: so fechamos uma thread se o dev MEXEU na linha (outdated), nunca por
+  // o modelo nao-deterministico ter deixado de re-gerar o finding.
+  isOutdated: boolean;
   comments: { nodes: Array<{ body: string }> };
 }
 
 // Helper: monta um node de review thread com o body do 1o comentario.
 // path default 'a.ts' cobre os casos que nao se importam com o arquivo.
-function makeThread(id: string, isResolved: boolean, primeiroBody: string, path = 'a.ts'): ReviewThreadNode {
-  return { id, isResolved, path, comments: { nodes: [{ body: primeiroBody }] } };
+function makeThread(id: string, isResolved: boolean, primeiroBody: string, path = 'a.ts', isOutdated = false): ReviewThreadNode {
+  return { id, isResolved, path, isOutdated, comments: { nodes: [{ body: primeiroBody }] } };
 }
 
 const target = { owner: 'o', repo: 'r', prNumber: 7 };
 const MARKER_NOSSO = '<!-- movvia-ai-review:seguranca:abc123def456 -->';
 
 describe('listFindingThreads', () => {
-  it('parseia { marker, threadId, path } das threads NOSSAS nao resolvidas', async () => {
+  it('parseia { marker, threadId, path, isOutdated } das threads NOSSAS nao resolvidas', async () => {
     const corpoComMarker = `**P0** — Token hardcoded\n\nrationale\n\n${MARKER_NOSSO}`;
-    const gql = new FakeGraphqlClient([makeThread('T1', false, corpoComMarker, 'conta.service.ts')]);
+    const gql = new FakeGraphqlClient([makeThread('T1', false, corpoComMarker, 'conta.service.ts', true)]);
     const threads = await listFindingThreads(gql, target);
-    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'conta.service.ts' }]);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'conta.service.ts', isOutdated: true }]);
   });
 
   it('descarta threads ja resolvidas (nao voltam para o ciclo de dedup)', async () => {
@@ -178,7 +182,7 @@ describe('listFindingThreads', () => {
       makeThread('T3', false, 'sem marker'),
     ]);
     const threads = await listFindingThreads(gql, target);
-    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'mexido.ts' }]);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'mexido.ts', isOutdated: false }]);
   });
 });
 
