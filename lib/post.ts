@@ -43,12 +43,22 @@ export interface InlineComment {
 
 /**
  * Um comentario inline NOSSO ja postado no PR: o `findingMarker` extraido do corpo
- * (ancora estavel de dedup) + o id da review thread (para resolver no GraphQL). A
- * borda que lista as threads e injetada de fora; reconcileInline so recebe este par.
+ * (ancora estavel de dedup) + o id da review thread (para resolver no GraphQL) + o
+ * `path` do arquivo onde a thread ancorou. A borda que lista as threads e injetada
+ * de fora; reconcileInline so recebe este trio.
+ *
+ * `path` existe para o re-review por delta: so reconciliamos threads de arquivos que
+ * o dev mexeu desde o ultimo review, preservando as demais (sem churn de resolve+repost).
  */
 export interface ExistingThread {
   marker: string;
   threadId: string;
+  path: string;
+}
+
+/** Arquivo de um finding: o cite JA validado contra o diff vence; file cru e fallback. */
+function findingFile(f: Finding): string {
+  return parseCite(f.cite)?.file ?? f.file;
 }
 
 /**
@@ -62,8 +72,28 @@ export interface ExistingThread {
  *
  * Ancora no findingMarker (e nao na linha crua) para sobreviver a deslocamento de
  * linha — mesma garantia de idempotencia documentada em findingMarker/findingId.
+ *
+ * `changedFiles` (re-review incremental): o modelo nao-deterministico re-gera markers
+ * diferentes a cada run, entao reconciliar o PR inteiro causa churn (resolve+repost)
+ * em arquivos que o dev nem tocou. Quando presente, restringe a reconciliacao SO aos
+ * arquivos do delta — findings/threads fora dele sao PRESERVADOS intactos. undefined
+ * (1o review, sem SHA anterior) mantem o comportamento atual: reconcilia tudo.
  */
 export function reconcileInline(
+  findings: Finding[],
+  existing: ExistingThread[],
+  changedFiles?: string[],
+): { toPost: Finding[]; toResolveThreadIds: string[] } {
+  // Early return: sem delta conhecido reconcilia o PR inteiro (caminho do 1o review).
+  if (changedFiles === undefined) return reconcileScope(findings, existing);
+  const delta = new Set(changedFiles);
+  const findingsNoDelta = findings.filter((f) => delta.has(findingFile(f)));
+  const threadsNoDelta = existing.filter((t) => delta.has(t.path));
+  return reconcileScope(findingsNoDelta, threadsNoDelta);
+}
+
+/** Regra base novo->post / sumido->resolve / persiste->nada sobre um escopo ja filtrado. */
+function reconcileScope(
   findings: Finding[],
   existing: ExistingThread[],
 ): { toPost: Finding[]; toResolveThreadIds: string[] } {

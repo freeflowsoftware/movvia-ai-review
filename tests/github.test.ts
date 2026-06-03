@@ -121,23 +121,26 @@ class FakeGraphqlClient implements GraphqlClient {
 interface ReviewThreadNode {
   id: string;
   isResolved: boolean;
+  // path do arquivo onde a thread ancorou — alimenta o re-review por delta.
+  path: string;
   comments: { nodes: Array<{ body: string }> };
 }
 
 // Helper: monta um node de review thread com o body do 1o comentario.
-function makeThread(id: string, isResolved: boolean, primeiroBody: string): ReviewThreadNode {
-  return { id, isResolved, comments: { nodes: [{ body: primeiroBody }] } };
+// path default 'a.ts' cobre os casos que nao se importam com o arquivo.
+function makeThread(id: string, isResolved: boolean, primeiroBody: string, path = 'a.ts'): ReviewThreadNode {
+  return { id, isResolved, path, comments: { nodes: [{ body: primeiroBody }] } };
 }
 
 const target = { owner: 'o', repo: 'r', prNumber: 7 };
 const MARKER_NOSSO = '<!-- movvia-ai-review:seguranca:abc123def456 -->';
 
 describe('listFindingThreads', () => {
-  it('parseia { marker, threadId } das threads NOSSAS nao resolvidas', async () => {
+  it('parseia { marker, threadId, path } das threads NOSSAS nao resolvidas', async () => {
     const corpoComMarker = `**P0** — Token hardcoded\n\nrationale\n\n${MARKER_NOSSO}`;
-    const gql = new FakeGraphqlClient([makeThread('T1', false, corpoComMarker)]);
+    const gql = new FakeGraphqlClient([makeThread('T1', false, corpoComMarker, 'conta.service.ts')]);
     const threads = await listFindingThreads(gql, target);
-    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1' }]);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'conta.service.ts' }]);
   });
 
   it('descarta threads ja resolvidas (nao voltam para o ciclo de dedup)', async () => {
@@ -152,12 +155,12 @@ describe('listFindingThreads', () => {
 
   it('mistura: retorna so a thread nossa nao resolvida entre varias', async () => {
     const gql = new FakeGraphqlClient([
-      makeThread('T1', false, `${MARKER_NOSSO}`),
+      makeThread('T1', false, `${MARKER_NOSSO}`, 'mexido.ts'),
       makeThread('T2', true, `resolvida\n${MARKER_NOSSO}`),
       makeThread('T3', false, 'sem marker'),
     ]);
     const threads = await listFindingThreads(gql, target);
-    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1' }]);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'mexido.ts' }]);
   });
 });
 

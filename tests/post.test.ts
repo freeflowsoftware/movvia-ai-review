@@ -98,9 +98,10 @@ describe('reconcileInline', () => {
       category, title: 't', rationale: 'r', suggestion: 's', cite: `${file}:10-12`,
     };
   }
-  // Helper: simula uma thread inline NOSSA ja postada (marker extraido do corpo + id).
+  // Helper: simula uma thread inline NOSSA ja postada (marker + id + arquivo da thread).
+  // O `path` deriva do cite do finding (o arquivo onde o comentario ancorou).
   function existingFor(f: Finding, threadId: string): ExistingThread {
-    return { marker: findingMarker(f), threadId };
+    return { marker: findingMarker(f), threadId, path: f.file };
   }
 
   it('(a) finding novo (sem thread) entra em toPost', () => {
@@ -142,5 +143,87 @@ describe('reconcileInline', () => {
     );
     expect(toPost).toEqual([novo]);
     expect(toResolveThreadIds).toEqual(['T2']);
+  });
+});
+
+describe('reconcileInline por delta de arquivos (re-review incremental)', () => {
+  // O re-review nao-deterministico re-gera markers diferentes a cada run (modelo
+  // varia category/linha). Reconciliar SO os arquivos do delta preserva as threads
+  // dos arquivos NAO-tocados, evitando churn de resolve+repost desnecessario.
+  function makeFinding(file: string, category: string): Finding {
+    return {
+      agent: 'seguranca', file, startLine: 10, endLine: 12, severity: 'P1',
+      category, title: 't', rationale: 'r', suggestion: 's', cite: `${file}:10-12`,
+    };
+  }
+  function existingFor(f: Finding, threadId: string): ExistingThread {
+    return { marker: findingMarker(f), threadId, path: f.file };
+  }
+
+  it('sem changedFiles (1o review) reconcilia tudo, igual ao comportamento atual', () => {
+    // changedFiles undefined = nao ha SHA anterior -> reconcilia o PR inteiro.
+    const novo = makeFinding('novo.ts', 'cred');
+    const corrigido = makeFinding('corrigido.ts', 'perf');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [novo],
+      [existingFor(corrigido, 'T2')],
+      undefined,
+    );
+    expect(toPost).toEqual([novo]);
+    expect(toResolveThreadIds).toEqual(['T2']);
+  });
+
+  it('preserva finding E thread de arquivo FORA do delta (nem posta nem resolve)', () => {
+    // intocado.ts nao mudou desde o ultimo review: seu finding novo nao deve postar
+    // e sua thread orfa (sem finding correspondente neste run) nao deve resolver.
+    const intocadoNovo = makeFinding('intocado.ts', 'cred');
+    const intocadoThread = makeFinding('intocado.ts', 'perf');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [intocadoNovo],
+      [existingFor(intocadoThread, 'T-INTOCADO')],
+      ['outro.ts'], // delta nao inclui intocado.ts
+    );
+    expect(toPost).toEqual([]);
+    expect(toResolveThreadIds).toEqual([]);
+  });
+
+  it('arquivo NO delta reconcilia normal: novo posta, sumido resolve', () => {
+    const novoNoDelta = makeFinding('mexido.ts', 'cred');
+    const sumidoNoDelta = makeFinding('mexido.ts', 'perf');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [novoNoDelta],
+      [existingFor(sumidoNoDelta, 'T-MEXIDO')],
+      ['mexido.ts'], // delta inclui mexido.ts
+    );
+    expect(toPost).toEqual([novoNoDelta]);
+    expect(toResolveThreadIds).toEqual(['T-MEXIDO']);
+  });
+
+  it('delta misto: reconcilia os do delta e preserva os de fora simultaneamente', () => {
+    const novoNoDelta = makeFinding('mexido.ts', 'cred');
+    const persistenteForaDelta = makeFinding('intocado.ts', 'lock');
+    const threadSumidaNoDelta = makeFinding('mexido.ts', 'perf');
+    const threadForaDelta = makeFinding('intocado.ts', 'lock');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [novoNoDelta, persistenteForaDelta],
+      [existingFor(threadSumidaNoDelta, 'T-SUMIDA'), existingFor(threadForaDelta, 'T-FORA')],
+      ['mexido.ts'],
+    );
+    // novo do delta posta; fora do delta nao posta (preservado).
+    expect(toPost).toEqual([novoNoDelta]);
+    // thread sumida do delta resolve; thread de fora preservada.
+    expect(toResolveThreadIds).toEqual(['T-SUMIDA']);
+  });
+
+  it('prioriza o arquivo do cite sobre o file cru para checar o delta', () => {
+    // parseCite.file e a fonte de verdade (validado contra o diff); file cru pode
+    // vir absoluto. O delta deve casar pelo cite, nao pelo file divergente.
+    const f: Finding = {
+      agent: 'seguranca', file: '/abs/checkout/mexido.ts', startLine: 10, endLine: 12,
+      severity: 'P1', category: 'cred', title: 't', rationale: 'r', suggestion: 's',
+      cite: 'mexido.ts:10-12',
+    };
+    const { toPost } = reconcileInline([f], [], ['mexido.ts']);
+    expect(toPost).toEqual([f]);
   });
 });

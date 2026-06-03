@@ -146,6 +146,9 @@ interface ReviewThreadsResponse {
         nodes: Array<{
           id: string;
           isResolved: boolean;
+          // path do arquivo onde a thread ancorou — usado pelo re-review por delta
+          // (reconciliar so os arquivos que o dev mexeu, preservando os demais).
+          path: string;
           comments: { nodes: Array<{ body: string }> };
         }>;
       };
@@ -158,7 +161,7 @@ const REVIEW_THREADS_QUERY = `
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $pr) {
         reviewThreads(first: 100) {
-          nodes { id isResolved comments(first: 1) { nodes { body } } }
+          nodes { id isResolved path comments(first: 1) { nodes { body } } }
         }
       }
     }
@@ -189,7 +192,7 @@ const FINDING_MARKER_PATTERN = /<!-- movvia-ai-review:[^>]+ -->/;
 export async function listFindingThreads(
   gql: GraphqlClient,
   t: PostTarget,
-): Promise<Array<{ marker: string; threadId: string }>> {
+): Promise<Array<{ marker: string; threadId: string; path: string }>> {
   const data = await gql.graphql<ReviewThreadsResponse>(REVIEW_THREADS_QUERY, {
     owner: t.owner,
     repo: t.repo,
@@ -200,14 +203,14 @@ export async function listFindingThreads(
   return naoResolvidas.flatMap(parseFindingThread);
 }
 
-/** Extrai o marker do 1o comentario; lista vazia descarta threads sem marker nosso. */
+/** Extrai marker + path do 1o comentario; lista vazia descarta threads sem marker nosso. */
 function parseFindingThread(
-  thread: { id: string; comments: { nodes: Array<{ body: string }> } },
-): Array<{ marker: string; threadId: string }> {
+  thread: { id: string; path: string; comments: { nodes: Array<{ body: string }> } },
+): Array<{ marker: string; threadId: string; path: string }> {
   const primeiroComentario = thread.comments.nodes[0]?.body ?? '';
   const marker = FINDING_MARKER_PATTERN.exec(primeiroComentario)?.[0];
   if (!marker) return [];
-  return [{ marker, threadId: thread.id }];
+  return [{ marker, threadId: thread.id, path: thread.path }];
 }
 
 /**
