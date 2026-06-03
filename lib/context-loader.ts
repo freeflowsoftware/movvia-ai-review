@@ -21,6 +21,12 @@ export function detectLanguages(files: string[]): string[] {
 
 /** Contexto do PR que vai no USER prompt (sem a persona, que e SYSTEM). */
 export interface UserPromptParts {
+  /**
+   * Regras COMPARTILHADAS da Movvia (org-rules), roteadas por stack e injetadas do repo
+   * CENTRAL — viajam com a Action, ao contrario das .claude/rules que vivem no super-repo
+   * nao-versionado. Opcional: callers legados/testes sem org-rules caem so no repoRules.
+   */
+  orgRules?: string[];
   repoRules: string;
   langPacks: string[];
   adrs: string;
@@ -142,6 +148,11 @@ export function agentMatchesPaths(changedFiles: string[], paths: string[]): bool
 export function buildUserPrompt(p: UserPromptParts): string {
   return [
     ...jiraSection(p.ticket),
+    // Org-rules ANTES das do repo: a base compartilhada da Movvia (lock financeiro, sem
+    // enum nativo, skeleton...) primeiro; as do repo alvo refinam/complementam depois.
+    '## Regras compartilhadas da Movvia (org-rules, roteadas por stack)',
+    (p.orgRules ?? []).join('\n\n') || '(nenhuma aplicavel a este diff)',
+    '',
     '## Regras do repositorio alvo (.claude/rules, CLAUDE.md, AGENTS.md)',
     p.repoRules || '(nenhuma regra encontrada — use best practices da stack)',
     '',

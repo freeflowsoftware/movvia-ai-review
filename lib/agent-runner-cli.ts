@@ -4,6 +4,7 @@ import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
 import { runAgent, realChatRunner } from './run-agent.js';
+import { loadOrgRules } from './org-rules.js';
 import { ADR_GLOBS } from './adr.js';
 import type { ContextPack, FileContextLayers, PackFile } from './context-pack.js';
 import {
@@ -140,6 +141,9 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // PR vira USER. Antes era um prompt unico passado ao opencode run.
   const system = buildSystemPrompt(spec);
   const user = buildUserPrompt({
+    // Regras compartilhadas da Movvia, do repo CENTRAL, roteadas por stack (org-rules/):
+    // chegam ao agente mesmo que o repo alvo nao tenha .claude/rules commitado.
+    orgRules: loadOrgRules(changedFiles, central),
     repoRules: loadRepoRules(repoDir),
     langPacks: loadLangPacks(changedFiles, central),
     adrs: loadAdrs(repoDir),
