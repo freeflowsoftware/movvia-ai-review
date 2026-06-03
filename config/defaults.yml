@@ -13,6 +13,16 @@ llm:
   api_key_env: LLM_API_KEY
 gatekeeper:
   adversarial_threshold: 0.8     # confianca minima (score/10) para manter finding
+# context_pack.*: cotas do context-pack deterministico (lib/context-pack.ts), lidas pelo
+# context-pack-cli. max_tokens e o cap rigido do pack inteiro (corte por prioridade
+# alterado>irmaos>imports>exemplos); skeleton_loc_threshold skeletoniza arquivos grandes
+# das camadas 2-4 (o alterado nunca). Editar estes valores muda o tamanho/escopo do pack.
+context_pack:
+  max_tokens: 100000
+  max_siblings: 4
+  max_imports: 6
+  max_exemplars: 3
+  skeleton_loc_threshold: 400
 paths_criticos:                  # CODEOWNERS humano obrigatorio
   - "**/financeiro/**"
   - "pe-migrations/**"

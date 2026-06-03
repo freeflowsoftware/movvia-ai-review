@@ -5,6 +5,7 @@ import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
 import { runAgent, realChatRunner } from './run-agent.js';
 import { ADR_GLOBS } from './adr.js';
+import type { ContextPack, FileContextLayers, PackFile } from './context-pack.js';
 import {
   extractJiraKey,
   fetchJiraTicket,
@@ -54,6 +55,46 @@ export function loadAdrs(repoDir: string): string {
   return matches.map((rel) => readFileSync(join(repoDir, rel), 'utf8')).join('\n\n');
 }
 
+/** Bloco de UM PackFile no prompt: caminho + nota de skeletonizacao + conteudo em fence. */
+function renderPackFile(label: string, f: PackFile): string {
+  const note = f.skeletonized ? ' (apenas assinaturas)' : '';
+  return `### ${label}: ${f.path}${note}\n\`\`\`\n${f.content}\n\`\`\``;
+}
+
+/** Bloco de uma camada (irmaos/imports/exemplares) — vazio quando a camada nao tem arquivos. */
+function renderLayer(label: string, files: PackFile[]): string[] {
+  return files.map((f) => renderPackFile(label, f));
+}
+
+/** Renderiza as 4 camadas de UM arquivo alterado em blocos legiveis para o LLM. */
+function renderFileLayers(layers: FileContextLayers): string {
+  return [
+    renderPackFile('Arquivo alterado', layers.changed),
+    ...renderLayer('Irmao do diretorio', layers.siblings),
+    ...renderLayer('Import intra-repo', layers.imports),
+    ...renderLayer('Exemplar do mesmo tipo', layers.exemplars),
+  ].join('\n\n');
+}
+
+/**
+ * Le o ContextPack JSON do artefato (context-pack-cli) e renderiza SO as secoes dos
+ * `changedFiles` que este agente vai revisar (cada agente roda em um subconjunto de arquivos
+ * via roteamento por paths — sem o filtro o prompt carregaria contexto de arquivos que o
+ * agente nem olha). DEGRADACAO GRACIOSA: packPath vazio/ilegivel/sem match => '' (o pack
+ * jamais quebra o pipeline; "vizinho nao resolvido != ausencia" do blueprint).
+ */
+export function loadContextPack(packPath: string, changedFiles: string[]): string {
+  if (!packPath || !existsSync(packPath)) return '';
+  try {
+    const pack = JSON.parse(readFileSync(packPath, 'utf8')) as ContextPack;
+    const wanted = new Set(changedFiles);
+    const selected = (pack.files ?? []).filter((f) => wanted.has(f.file));
+    return selected.map(renderFileLayers).join('\n\n');
+  } catch {
+    return ''; // JSON corrompido nao pode derrubar o review
+  }
+}
+
 /**
  * Resolve a chave Jira do PR: JIRA_KEY explicito tem prioridade; senao extrai do PR_TITLE.
  * Early return quando nada casa para nao chamar a Jira a toa nos repos sem ticket no titulo.
@@ -76,11 +117,12 @@ export async function loadJiraTicket(env: NodeJS.ProcessEnv): Promise<JiraTicket
   return (await fetchJiraTicket(key, client)) ?? undefined;
 }
 
-// CLI: agent-runner-cli.ts <agentName> <repoDir> <diffPath>
+// CLI: agent-runner-cli.ts <agentName> <repoDir> <diffPath> [packPath]
 if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // Fallback '' nos argv (mesma convencao de jira.ts/adr.ts) para satisfazer
   // noUncheckedIndexedAccess do tsconfig — slice() devolve (string|undefined)[].
-  const [name = '', repoDir = '', diffPath = ''] = process.argv.slice(2);
+  // packPath e o 4o argv OPCIONAL (artefato context-pack); vazio => prompt sem contexto.
+  const [name = '', repoDir = '', diffPath = '', packPath = ''] = process.argv.slice(2);
   const central = join(import.meta.dirname, '..');
   const spec = parseAgentFile(readFileSync(join(central, 'agents', `${name}.md`), 'utf8'), `agents/${name}.md`);
   const diff = readFileSync(diffPath, 'utf8');
@@ -88,7 +130,7 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? '');
   // Roteamento por paths: se o diff nao toca nenhum glob do agente, emite findings vazio
   // e NAO chama o LLM (economia de tokens + evita findings off-dimension de um agente que
-  // nem deveria rodar neste PR). Sai antes de montar prompt/buscar Jira.
+  // nem deveria rodar neste PR). Sai antes de montar prompt/buscar Jira/ler o context-pack.
   if (!agentMatchesPaths(changedFiles, spec.paths)) {
     process.stdout.write(JSON.stringify({ agent: spec.name, findings: [] }));
     process.exit(0);
@@ -103,6 +145,8 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
     adrs: loadAdrs(repoDir),
     diff,
     ticket,
+    // Context-pack determinístico (Fase 1b): so as secoes dos arquivos que ESTE agente revisa.
+    contextPack: loadContextPack(packPath, changedFiles) || undefined,
   });
   // AGENT_MODEL vem do frontmatter do agente (matrix.model). Vazio = default do CI,
   // configuravel por DEFAULT_MODEL. Id PURO do OpenRouter (sem prefixo 'llm/' do opencode):

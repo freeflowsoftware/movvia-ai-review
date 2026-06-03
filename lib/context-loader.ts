@@ -27,6 +27,12 @@ export interface UserPromptParts {
   diff: string;
   /** US do Jira; quando presente, o agente de requisitos confronta os criterios de aceite. */
   ticket?: JiraTicket;
+  /**
+   * Context-pack determinístico (arquivos reais, vizinhos, padrões) dos arquivos alterados.
+   * Quando presente, injeta a secao "## CONTEXTO DO CODEBASE" para o agente confirmar se o
+   * que parece ausente ja segue o padrao do repo ANTES de reportar (anti-falso-positivo).
+   */
+  contextPack?: string;
 }
 
 /** Mantido para nao quebrar callers/testes legados: persona (system) + contexto (user). */
@@ -42,6 +48,18 @@ export interface PromptParts extends UserPromptParts {
 function jiraSection(ticket: JiraTicket | undefined): string[] {
   if (!ticket) return [];
   return ['## US do Jira', `${ticket.summary}\n\n${ticket.description}`.trim(), ''];
+}
+
+/**
+ * Seccao "## CONTEXTO DO CODEBASE" do prompt — arquivos reais, vizinhos e padrões dos
+ * arquivos alterados (context-pack determinístico). So existe quando ha pack: vazia para
+ * nao adicionar linhas em branco/ruido nos PRs/jobs sem context-pack. Vai ENTRE os ADRs
+ * (regra documentada) e o DIFF, deliberadamente abaixo das regras: "regra documentada
+ * vence padrao observado" (blueprint Fase 1), entao o agente le a regra antes do padrao.
+ */
+function contextoSection(contextPack: string | undefined): string[] {
+  if (!contextPack) return [];
+  return ['## CONTEXTO DO CODEBASE (arquivos reais, vizinhos, padroes)', contextPack, ''];
 }
 
 /**
@@ -86,6 +104,10 @@ export function buildSystemPrompt(spec: AgentSpec): string {
     '- Avalie SOMENTE linhas adicionadas (+) do diff.',
     '- Para CADA problema, cite OBRIGATORIAMENTE [arquivo:linha_inicio-linha_fim] de uma linha adicionada.',
     '- NAO invente APIs, metodos ou arquivos. NAO flague o que o framework ja garante.',
+    // Anti-falso-positivo da Fase 1b: o pack ensina o padrao do repo; a regra documentada
+    // ainda vence o padrao observado (senao o pack normalizaria anti-padroes, ex: "vizinhos
+    // tem any => para de reportar any"). Texto fixado por teste (deve casar literalmente).
+    '- Use o CONTEXTO DO CODEBASE para confirmar se o que parece ausente ja segue o padrao do repo ANTES de reportar. Regra documentada vence padrao observado: se uma regra exige X, reporte mesmo que os vizinhos nao facam X.',
     '- Responda em PT-BR.',
     '- Saida: UNICO objeto JSON, sem texto fora do JSON, EXATAMENTE neste schema (nomes de campo em camelCase):',
     '  {"agent":"<nome>","findings":[{"file":"caminho","startLine":N,"endLine":N,"severity":"P0|P1|P2","category":"slug","title":"...","rationale":"...","suggestion":"...","cite":"caminho:N-N"}]}',
@@ -118,6 +140,8 @@ export function buildUserPrompt(p: UserPromptParts): string {
     '## ADRs relevantes (decisoes arquiteturais ja tomadas)',
     p.adrs || '(nenhum)',
     '',
+    // Context-pack ENTRE ADRs e DIFF: regra documentada acima do padrao observado.
+    ...contextoSection(p.contextPack),
     '## DIFF DO PR',
     p.diff,
   ].join('\n');

@@ -7,9 +7,11 @@ import {
   loadRepoRules,
   loadLangPacks,
   loadAdrs,
+  loadContextPack,
   resolveJiraKey,
   loadJiraTicket,
 } from '../lib/agent-runner-cli.js';
+import type { ContextPack } from '../lib/context-pack.js';
 
 describe('loadRepoRules', () => {
   it('concatena .claude/rules/*.md e CLAUDE.md do repo alvo', () => {
@@ -53,6 +55,54 @@ describe('loadAdrs', () => {
   it('retorna string vazia quando nao ha ADRs', () => {
     const dir = mkdtempSync(join(tmpdir(), 'repo-'));
     expect(loadAdrs(dir)).toBe('');
+  });
+});
+
+describe('loadContextPack', () => {
+  const PACK: ContextPack = {
+    files: [
+      {
+        file: 'src/conta.service.ts',
+        changed: { path: 'src/conta.service.ts', content: 'class ContaService {}', skeletonized: false },
+        siblings: [{ path: 'src/pedido.service.ts', content: 'class PedidoService {}', skeletonized: false }],
+        imports: [{ path: 'src/conta.repo.ts', content: 'class ContaRepo {}', skeletonized: true }],
+        exemplars: [],
+      },
+      {
+        file: 'src/outro.service.ts',
+        changed: { path: 'src/outro.service.ts', content: 'class OutroService {}', skeletonized: false },
+        siblings: [], imports: [], exemplars: [],
+      },
+    ],
+  };
+
+  function writePack(pack: ContextPack): string {
+    const dir = mkdtempSync(join(tmpdir(), 'pack-'));
+    const path = join(dir, 'context-pack.json');
+    writeFileSync(path, JSON.stringify(pack));
+    return path;
+  }
+
+  it('renderiza so as secoes dos changedFiles (filtra os arquivos nao alterados neste agente)', () => {
+    const out = loadContextPack(writePack(PACK), ['src/conta.service.ts']);
+    expect(out).toContain('src/conta.service.ts');
+    expect(out).toContain('class ContaService {}');     // camada 1 (alterado)
+    expect(out).toContain('class PedidoService {}');     // camada 2 (irmao)
+    expect(out).toContain('class ContaRepo {}');         // camada 3 (import)
+    expect(out).not.toContain('class OutroService {}');  // arquivo fora do conjunto deste agente
+  });
+
+  it('retorna string vazia quando packPath e vazio (sem context-pack no job)', () => {
+    expect(loadContextPack('', ['src/conta.service.ts'])).toBe('');
+  });
+
+  // Degradacao graciosa: pack ilegivel/inexistente NUNCA quebra o pipeline (vira pack vazio).
+  it('retorna string vazia quando o arquivo do pack nao existe', () => {
+    expect(loadContextPack('/nao/existe/context-pack.json', ['src/conta.service.ts'])).toBe('');
+  });
+
+  it('retorna string vazia quando nenhum changedFile casa o pack', () => {
+    expect(loadContextPack(writePack(PACK), ['src/inexistente.ts'])).toBe('');
   });
 });
 

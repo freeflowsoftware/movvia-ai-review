@@ -106,6 +106,16 @@ describe('buildSystemPrompt', () => {
     const s = buildSystemPrompt({ ...SPEC, name: 'perf', dimension: 'performance' });
     expect(s).toContain('EXCLUSIVAMENTE o revisor da dimensao performance');
   });
+
+  // Fase 1b: a instrucao que ensina o agente a USAR o context-pack para confirmar padrao
+  // ANTES de reportar (anti-FP), preservando o primado da regra documentada sobre o padrao
+  // observado — sem isso o pack viraria "anti-padrao normalizado" (vizinhos tem any => para
+  // de reportar any). Trava o texto exato do blueprint.
+  it('contem a instrucao de usar o CONTEXTO e "Regra documentada vence"', () => {
+    const s = buildSystemPrompt(SPEC);
+    expect(s).toContain('Use o CONTEXTO DO CODEBASE para confirmar se o que parece ausente');
+    expect(s).toContain('Regra documentada vence padrao observado');
+  });
 });
 
 describe('agentMatchesPaths', () => {
@@ -148,5 +158,41 @@ describe('buildUserPrompt', () => {
   it('NAO contem a persona (isso e do system prompt)', () => {
     const u = buildUserPrompt({ repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;' });
     expect(u).not.toContain('revisor de PERFORMANCE');
+  });
+
+  // Fase 1b: o context-pack determinístico injeta arquivos reais/vizinhos/padrões para
+  // matar falso-positivo ("validacao ausente" num campo que segue o padrao). A secao so
+  // existe quando contextPack esta presente, para nao adicionar ruido nos PRs sem pack.
+  it('contem a secao "## CONTEXTO DO CODEBASE" quando contextPack presente', () => {
+    const u = buildUserPrompt({
+      repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;',
+      contextPack: 'conta.service.ts: validacao via class-validator',
+    });
+    expect(u).toContain('## CONTEXTO DO CODEBASE (arquivos reais, vizinhos, padroes)');
+    expect(u).toContain('conta.service.ts: validacao via class-validator');
+  });
+
+  it('omite a secao "## CONTEXTO DO CODEBASE" quando nao ha contextPack', () => {
+    const u = buildUserPrompt({ repoRules: '', langPacks: [], adrs: '', diff: '+const x = 1;' });
+    expect(u).not.toContain('## CONTEXTO DO CODEBASE');
+  });
+
+  // Ordem CANONICA do blueprint: regras (documentadas) ACIMA do contexto (padrao observado),
+  // e o DIFF por ultimo. "Regra documentada vence padrao observado" — por isso as regras vem
+  // antes do pack, e o pack antes do diff que ele contextualiza.
+  it('injeta CONTEXTO entre as ADRs/regras e o DIFF (ordem regras < contexto < diff)', () => {
+    const u = buildUserPrompt({
+      repoRules: 'REGRA: usar lock distribuido',
+      langPacks: [], adrs: 'ADR-001: hexagonal', diff: '+const x = 1;',
+      contextPack: 'PADRAO_OBSERVADO_NO_REPO',
+    });
+    const idxRegras = u.indexOf('REGRA: usar lock distribuido');
+    const idxAdr = u.indexOf('ADR-001: hexagonal');
+    const idxContexto = u.indexOf('## CONTEXTO DO CODEBASE');
+    const idxDiff = u.indexOf('## DIFF DO PR');
+    expect(idxRegras).toBeGreaterThanOrEqual(0);
+    expect(idxAdr).toBeLessThan(idxContexto);   // ADRs antes do contexto
+    expect(idxRegras).toBeLessThan(idxContexto); // regras antes do contexto
+    expect(idxContexto).toBeLessThan(idxDiff);   // contexto antes do diff
   });
 });
