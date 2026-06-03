@@ -222,6 +222,29 @@ describe('reconcileInline (reconciliacao por proximidade)', () => {
     expect(toPost).toEqual([novo]);
     expect(toResolveThreadIds).toEqual(['T2']);
   });
+
+  it('(f) zumbi: thread !isOutdated SEM finding proximo -> zombieCandidateThreadIds (NAO toResolve)', () => {
+    // Linha intacta + finding sumiu do radar = pode ter sido corrigida por insercao
+    // distante. A heuristica isOutdated NAO fecha (fica zumbi); o verificador de codigo
+    // confirma lendo o arquivo. Aqui so checamos que a thread vira CANDIDATA.
+    const { toPost, toResolveThreadIds, zombieCandidateThreadIds } = reconcileInline(
+      [],
+      [thread('T-ZUMBI', 'vivo.ts', 12, false)],
+    );
+    expect(toPost).toEqual([]);
+    expect(toResolveThreadIds).toEqual([]);
+    expect(zombieCandidateThreadIds).toEqual(['T-ZUMBI']);
+  });
+
+  it('(g) outdated->toResolve (nao zumbi); com finding proximo->nenhum dos dois', () => {
+    const out = reconcileInline([], [thread('T-OUT', 'a.ts', 12, true)]);
+    expect(out.toResolveThreadIds).toEqual(['T-OUT']);
+    expect(out.zombieCandidateThreadIds).toEqual([]);
+    const persiste = makeFinding('p.ts', 12);
+    const vivo = reconcileInline([persiste], [thread('T-P', 'p.ts', 12, false)]);
+    expect(vivo.zombieCandidateThreadIds).toEqual([]); // tem finding proximo -> persiste, nao zumbi
+    expect(vivo.toResolveThreadIds).toEqual([]);
+  });
 });
 
 describe('reconcileInline por delta de arquivos (re-review incremental)', () => {
@@ -274,13 +297,15 @@ describe('reconcileInline por delta de arquivos (re-review incremental)', () => 
     // Ex real #475: corrigi dead code numa linha do service (T-CORRIGIDO, outdated) mas
     // o cross-tenant P0 em OUTRA linha do MESMO arquivo (T-VIVO, intacta) segue vivo ->
     // nao pode fechar. So o outdated resolve.
-    const { toPost, toResolveThreadIds } = reconcileInline(
+    const { toPost, toResolveThreadIds, zombieCandidateThreadIds } = reconcileInline(
       [],
       [thread('T-CORRIGIDO', 'service.ts', 12, true), thread('T-VIVO', 'service.ts', 40, false)],
       ['service.ts'],
     );
     expect(toPost).toEqual([]);
     expect(toResolveThreadIds).toEqual(['T-CORRIGIDO']);
+    // T-VIVO (cross-tenant P0 intacto, no delta) vira CANDIDATO a verificacao de codigo.
+    expect(zombieCandidateThreadIds).toEqual(['T-VIVO']);
   });
 
   it('anti-ACUMULO no delta: finding re-detectado proximo da thread existente NAO vira novo', () => {

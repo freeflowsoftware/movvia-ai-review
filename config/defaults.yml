@@ -13,6 +13,13 @@ llm:
   api_key_env: LLM_API_KEY
 gatekeeper:
   adversarial_threshold: 0.8     # confianca minima (score/10) para manter finding
+# verify.*: o verificador de correcao por codigo (lib/verify-fix.ts) confirma, lendo o
+# arquivo no head, se um problema foi corrigido ANTES de fechar a thread. close_threshold
+# = confianca minima (score/10) para fechar; max_threads_per_run = cap rigido de chamadas
+# LLM por run (acima dele, preserva o excedente). P0 NUNCA fecha por aqui (vira reply).
+verify:
+  close_threshold: 0.9
+  max_threads_per_run: 10
 # context_pack.*: cotas do context-pack deterministico (lib/context-pack.ts), lidas pelo
 # context-pack-cli. max_tokens e o cap rigido do pack inteiro (corte por prioridade
 # alterado>irmaos>imports>exemplos); skeleton_loc_threshold skeletoniza arquivos grandes

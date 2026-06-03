@@ -188,7 +188,7 @@ const REVIEW_THREADS_QUERY = `
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $pr) {
         reviewThreads(first: 100) {
-          nodes { id isResolved isOutdated path line comments(first: 1) { nodes { body } } }
+          nodes { id isResolved isOutdated path line comments(first: 10) { nodes { body } } }
         }
       }
     }
@@ -200,6 +200,28 @@ const RESOLVE_THREAD_MUTATION = `
       thread { id isResolved }
     }
   }`;
+
+const REPLY_THREAD_MUTATION = `
+  mutation($threadId: ID!, $body: String!) {
+    addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+      comment { id }
+    }
+  }`;
+
+/**
+ * Posta um reply DENTRO de uma review thread existente (não um comentário novo). Usado
+ * pelo verificador de código quando um P0 parece corrigido mas NÃO pode fechar
+ * automaticamente — responde ao CODEOWNER em vez de resolver. Best-effort (espelha
+ * resolveOneThread): uma falha não derruba o post. Requer PAT/App (GITHUB_TOKEN não basta).
+ */
+export async function replyToReviewThread(gql: GraphqlClient, threadId: string, body: string): Promise<void> {
+  try {
+    await gql.graphql(REPLY_THREAD_MUTATION, { threadId, body });
+    console.log(`Reply postado na thread: ${threadId}`);
+  } catch (e) {
+    console.log(`Reply na thread ${threadId} pulado: ${(e as Error).message}`);
+  }
+}
 
 /**
  * Casa o findingMarker invisivel cravado em buildInlineBody (post.ts). Mesmo formato
@@ -216,10 +238,19 @@ const FINDING_MARKER_PATTERN = /<!-- movvia-ai-review:[^>]+ -->/;
  * para decidir o que duplicar (toPost) e o que fechar (toResolveThreadIds). Filtra
  * isResolved aqui porque thread ja resolvida nao volta para o ciclo de dedup.
  */
-export async function listFindingThreads(
-  gql: GraphqlClient,
-  t: PostTarget,
-): Promise<Array<{ marker: string; threadId: string; path: string; line: number; isOutdated: boolean }>> {
+export interface FindingThread {
+  marker: string;
+  threadId: string;
+  path: string;
+  line: number;
+  isOutdated: boolean;
+  /** Corpo do 1º comentario (o finding original) — fonte do dossiê do verificador de codigo. */
+  rootBody: string;
+  /** Ja respondemos nesta thread? (algum comentario abaixo do root carrega NOSSO marker.) */
+  hasOurReply: boolean;
+}
+
+export async function listFindingThreads(gql: GraphqlClient, t: PostTarget): Promise<FindingThread[]> {
   const data = await gql.graphql<ReviewThreadsResponse>(REVIEW_THREADS_QUERY, {
     owner: t.owner,
     repo: t.repo,
@@ -231,18 +262,20 @@ export async function listFindingThreads(
 }
 
 /**
- * Extrai marker + path + line + isOutdated do 1o comentario; lista vazia descarta as
- * sem marker nosso. `line` null (linha removida do diff) vira -1: nunca casa por
- * proximidade (findingLine >= 1), entao a thread fica candidata a resolver — coerente,
- * pois a linha que a originou sumiu.
+ * Extrai marker + path + line + isOutdated + rootBody + hasOurReply do 1o comentario;
+ * lista vazia descarta as sem marker nosso. `line` null (linha removida do diff) vira -1:
+ * nunca casa por proximidade (findingLine >= 1), entao a thread fica candidata a resolver.
+ * `hasOurReply`: algum comentario ABAIXO do root carrega NOSSO marker — anti-loop do reply.
  */
 function parseFindingThread(
   thread: { id: string; path: string; line: number | null; isOutdated: boolean; comments: { nodes: Array<{ body: string }> } },
-): Array<{ marker: string; threadId: string; path: string; line: number; isOutdated: boolean }> {
-  const primeiroComentario = thread.comments.nodes[0]?.body ?? '';
-  const marker = FINDING_MARKER_PATTERN.exec(primeiroComentario)?.[0];
+): FindingThread[] {
+  const nodes = thread.comments.nodes;
+  const rootBody = nodes[0]?.body ?? '';
+  const marker = FINDING_MARKER_PATTERN.exec(rootBody)?.[0];
   if (!marker) return [];
-  return [{ marker, threadId: thread.id, path: thread.path, line: thread.line ?? -1, isOutdated: thread.isOutdated }];
+  const hasOurReply = nodes.slice(1).some((n) => FINDING_MARKER_PATTERN.test(n.body));
+  return [{ marker, threadId: thread.id, path: thread.path, line: thread.line ?? -1, isOutdated: thread.isOutdated, rootBody, hasOurReply }];
 }
 
 /**
@@ -315,6 +348,34 @@ export async function changedFilesSince(
     basehead: `${baseSha}...${headSha}`,
   });
   return (data.files ?? []).map((f) => f.filename);
+}
+
+/** Shape minimo do payload de repos.getContent (arquivo unico) que getFileAtRef le. */
+interface ContentResponse {
+  data: { type?: string; content?: string };
+}
+
+/** Subconjunto do Octokit que getFileAtRef consome (permite fake nomeado nos testes). */
+export interface ContentClient {
+  repos: {
+    getContent(params: { owner: string; repo: string; path: string; ref: string }): Promise<ContentResponse>;
+  };
+}
+
+/**
+ * Borda externa: conteudo de UM arquivo no SHA do head, para o verificador de codigo ler
+ * o estado atual (e validar a citacao da correcao contra ele). Sem checkout extra do repo
+ * alvo — usa a API no SHA exato. Retorna null em diretorio/arquivo ausente/403 (repo
+ * privado externo): o chamador trata null como "nao consegui ler" -> PRESERVA (fail-closed).
+ */
+export async function getFileAtRef(octokit: ContentClient, t: PostTarget, path: string, ref: string): Promise<string | null> {
+  try {
+    const { data } = await octokit.repos.getContent({ owner: t.owner, repo: t.repo, path, ref });
+    if (data.type !== 'file' || typeof data.content !== 'string') return null;
+    return Buffer.from(data.content, 'base64').toString('utf8');
+  } catch {
+    return null;
+  }
 }
 
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */

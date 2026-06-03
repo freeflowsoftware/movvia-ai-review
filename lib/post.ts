@@ -2,6 +2,7 @@ import type { Finding, Verdict } from './types.js';
 import type { ReviewEvent } from './github.js';
 import { findingId } from './gatekeeper.js';
 import { parseCite } from './cite-the-line.js';
+import { readVerifyConfig, verifyZombieThreads, type ZombieThread } from './verify-fix.js';
 
 /**
  * O review formal (APPROVE/REQUEST_CHANGES) so e submetido quando ha identidade que
@@ -70,6 +71,12 @@ export interface ExistingThread {
   path: string;
   line: number;
   isOutdated: boolean;
+  /**
+   * Corpo do 1º comentario da thread (o finding original via buildInlineBody). Opcional:
+   * só o verificador de correção (fecha-zumbi) precisa — reconstrói o dossiê com
+   * parseInlineBody. A reconciliação por proximidade não o usa.
+   */
+  rootBody?: string;
 }
 
 /** Janela de proximidade (linhas) para casar um finding com uma thread ja postada. */
@@ -112,7 +119,7 @@ export function reconcileInline(
   findings: Finding[],
   existing: ExistingThread[],
   changedFiles?: string[],
-): { toPost: Finding[]; toResolveThreadIds: string[] } {
+): { toPost: Finding[]; toResolveThreadIds: string[]; zombieCandidateThreadIds: string[] } {
   // Early return: sem delta conhecido reconcilia o PR inteiro (caminho do 1o review).
   if (changedFiles === undefined) return reconcileScope(findings, existing);
   const delta = new Set(changedFiles);
@@ -138,12 +145,19 @@ export function reconcileInline(
 function reconcileScope(
   findings: Finding[],
   existing: ExistingThread[],
-): { toPost: Finding[]; toResolveThreadIds: string[] } {
+): { toPost: Finding[]; toResolveThreadIds: string[]; zombieCandidateThreadIds: string[] } {
   const toPost = findings.filter((f) => !existing.some((t) => matchesThread(f, t)));
   const toResolveThreadIds = existing
     .filter((t) => t.isOutdated && !findings.some((f) => matchesThread(f, t)))
     .map((t) => t.threadId);
-  return { toPost, toResolveThreadIds };
+  // ZUMBI: thread cujo problema sumiu do radar (sem finding proximo) MAS a linha nao
+  // mudou (!isOutdated) — exatamente as que a heuristica PRESERVA hoje (o gate isOutdated
+  // nao fecha). Podem ter sido corrigidas por insercao DISTANTE da linha ancorada. O
+  // verificador de codigo (verify-fix) confirma lendo o arquivo se de fato foi corrigido.
+  const zombieCandidateThreadIds = existing
+    .filter((t) => !t.isOutdated && !findings.some((f) => matchesThread(f, t)))
+    .map((t) => t.threadId);
+  return { toPost, toResolveThreadIds, zombieCandidateThreadIds };
 }
 
 function buildInlineBody(f: Finding): string {
@@ -245,7 +259,8 @@ async function findExistingSummaryRef(
 // --- CLI: post.ts <verdictPath> → posta resumo (idempotente) + inline + check run ---
 if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
-  const { createOctokit, emitCheckRun, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, changedFilesSince } = await import('./github.js');
+  const { join } = await import('node:path');
+  const { createOctokit, emitCheckRun, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, replyToReviewThread, getFileAtRef, changedFilesSince } = await import('./github.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
   const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
@@ -302,7 +317,7 @@ if (process.argv[1]?.endsWith('post.ts')) {
   // listFindingThreads/resolveReviewThreads usam o resolveOctokit (PAT/App) porque o
   // GITHUB_TOKEN nativo do bot NAO resolve threads (confirmado em runtime).
   const existing = await listFindingThreads(resolveOctokit, { owner, repo, prNumber });
-  const { toPost, toResolveThreadIds } = reconcileInline(findings, existing, changedFiles);
+  const { toPost, toResolveThreadIds, zombieCandidateThreadIds } = reconcileInline(findings, existing, changedFiles);
   // Diferencial do prototipo /revisar-pr: comentarios INLINE na linha exata. Posta
   // SO os novos (toPost) numa unica review ancorada no sha; dedup via findingMarker.
   const inlineComments = buildInlineComments(toPost);
@@ -312,20 +327,50 @@ if (process.argv[1]?.endsWith('post.ts')) {
   if (inlineComments.length > 0) {
     await postReview(octokit, { owner, repo, prNumber }, sha, reviewEvent, summary, inlineComments);
   }
-  // Fecha as threads cujos findings o dev ja corrigiu (marker sumiu). Idempotente:
-  // resolver thread ja resolvida e no-op; allSettled isola falha por thread. Usa o
-  // resolveOctokit (PAT/App) porque o GITHUB_TOKEN do bot nao resolve threads. O retorno
-  // e quantas REALMENTE resolveram (fulfilled) — o log final reporta esse numero real.
-  const threadsResolvidas = await resolveReviewThreads(resolveOctokit, toResolveThreadIds);
+  // VERIFICADOR DE CODIGO (fecha-zumbi): as threads zumbi (problema sumiu do radar mas a
+  // linha nao mudou -> a heuristica isOutdated NAO fecharia) podem ter sido corrigidas por
+  // insercao DISTANTE. Um LLM le o arquivo no head (getFileAtRef no SHA exato — sem risco
+  // de estado obsoleto) e CONFIRMA a correcao citando a linha. P0 vira reply, nunca resolve.
+  // So roda com candidatos + LLM configurado + identidade que resolve (PAT/App).
+  let toResolveExtra: string[] = [];
+  const canResolve = Boolean(resolvePat || process.env.REVIEW_APP_ID);
+  if (zombieCandidateThreadIds.length > 0 && process.env.LLM_API_KEY && canResolve) {
+    const { realChatRunner } = await import('./run-agent.js');
+    const cfg = readVerifyConfig(join(import.meta.dirname, '..', 'config', 'defaults.yml'));
+    const verifyModel = process.env.VERIFY_MODEL || process.env.DEDUP_MODEL || 'deepseek/deepseek-v4-flash';
+    const candidates: ZombieThread[] = existing
+      .filter((t) => zombieCandidateThreadIds.includes(t.threadId))
+      .map((t) => ({ threadId: t.threadId, path: t.path, rootBody: t.rootBody ?? '' }));
+    // resolveOctokit (PAT/App) tambem le o conteudo: em repo privado externo o GH_TOKEN da 403.
+    const contentClient = resolveOctokit as unknown as Parameters<typeof getFileAtRef>[0];
+    const fileProvider = (path: string) =>
+      getFileAtRef(contentClient, { owner, repo, prNumber }, path, sha).then((c) => c ?? '');
+    const { toResolveExtra: extra, p0ToReply } = await verifyZombieThreads({
+      candidates, fileProvider, run: realChatRunner, model: verifyModel,
+      closeThreshold: cfg.closeThreshold, maxThreads: cfg.maxThreads,
+    });
+    toResolveExtra = extra;
+    // Reply P0: so se ainda NAO respondemos nessa thread (anti-loop por hasOurReply).
+    const byId = new Map(existing.map((t) => [t.threadId, t]));
+    for (const { threadId, correctionLine } of p0ToReply) {
+      if (byId.get(threadId)?.hasOurReply) continue;
+      const body = `Indicio de correcao na linha ${correctionLine}, mas este e um P0 e NAO fecha automaticamente — confirme e resolva manualmente (CODEOWNER).\n\n<!-- movvia-ai-review:reply:${threadId} -->`;
+      await replyToReviewThread(resolveOctokit, threadId, body);
+    }
+  }
+  // Fecha as threads que o dev corrigiu: pela heuristica (isOutdated) UNIAO as confirmadas
+  // pelo verificador de codigo (zumbis). Idempotente; allSettled isola falha por thread.
+  // resolveOctokit (PAT/App) porque o GITHUB_TOKEN do bot nao resolve threads.
+  const allToResolve = [...toResolveThreadIds, ...toResolveExtra];
+  const threadsResolvidas = await resolveReviewThreads(resolveOctokit, allToResolve);
   // O check run (via App) e quem trava o merge; o review formal via PAT do Pablo e
   // best-effort (o App nao pode aprovar o proprio PR de teste -> 422 ignorado).
   if (process.env.REVIEW_PAT) {
     const pat = createOctokit({ pat: process.env.REVIEW_PAT });
     await approveBestEffort(pat, { owner, repo, prNumber }, verdict.event);
   }
-  // Reporta quantas threads REALMENTE resolveram (threadsResolvidas), nao quantas tentou
-  // (toResolveThreadIds.length): se o token nao resolver, o numero real expoe o problema.
+  // Reporta resolvidas REAIS / tentadas + quantos zumbis o verificador confirmou.
   console.log(
-    `Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} novos inline, ${threadsResolvidas}/${toResolveThreadIds.length} threads resolvidas)`,
+    `Posted: ${verdict.event} (${findings.length} findings, ${inlineComments.length} novos inline, ${threadsResolvidas}/${allToResolve.length} threads resolvidas, ${toResolveExtra.length}/${zombieCandidateThreadIds.length} zumbis confirmados)`,
   );
 }

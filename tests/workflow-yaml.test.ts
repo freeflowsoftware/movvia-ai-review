@@ -142,6 +142,30 @@ describe('o step de post expoe um PAT para o resolve de threads (I2)', () => {
     expect(keys).toContain('AI_REVIEW_REPO_TOKEN');
     expect(String(step.env!.AI_REVIEW_REPO_TOKEN)).toContain('secrets.AI_REVIEW_REPO_TOKEN');
   });
+
+  it('o step de post exporta LLM_API_KEY + VERIFY_MODEL ao verificador de codigo (fecha-zumbi)', () => {
+    // verifyZombieThreads roda no job post via realChatRunner -> precisa de LLM_API_KEY no
+    // ambiente; VERIFY_MODEL e o modelo de raciocinio (deepseek-v4-flash, nao Flash-Lite).
+    const step = findStep(wf, 'post', 'Postar review');
+    const keys = Object.keys(step.env ?? {});
+    expect(keys).toContain('LLM_API_KEY');
+    expect(keys).toContain('VERIFY_MODEL');
+    expect(String(step.env!.VERIFY_MODEL)).toBe('deepseek/deepseek-v4-flash');
+  });
+});
+
+// O verificador de codigo le/fecha threads contra o head; um run velho contra estado
+// obsoleto e perigoso. concurrency top-level serializa por PR e cancela o run velho.
+describe('ai-review tem concurrency por PR (serializa o verificador de codigo)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow & { concurrency?: { group?: string; 'cancel-in-progress'?: boolean } };
+
+  it('grupo derivado de inputs.pr_number + cancel-in-progress true', () => {
+    expect(wf.concurrency).toBeDefined();
+    expect(String(wf.concurrency!.group)).toContain('inputs.pr_number');
+    expect(wf.concurrency!['cancel-in-progress']).toBe(true);
+  });
 });
 
 // Fase 0: todos os jobs do ai-review.yml usam cache de pnpm (pnpm/action-setup +

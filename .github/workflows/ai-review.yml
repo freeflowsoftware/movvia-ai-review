@@ -27,6 +27,12 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
+# Serializa por PR: um push novo cancela o run velho. Fecha a corrida do verificador de
+# codigo lendo/fechando threads contra um estado obsoleto (o run sobrevivente le sempre o
+# head atual via getFileAtRef no SHA). cancel-in-progress: o ultimo commit e o que vale.
+concurrency:
+  group: movvia-ai-review-pr-${{ inputs.pr_number }}
+  cancel-in-progress: true
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -293,4 +299,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}
+          # Verificador de codigo (fecha-zumbi): realChatRunner le LLM_API_KEY/LLM_BASE_URL
+          # do ambiente; le o arquivo no head via getFileAtRef (sem download de context-pack).
+          # VERIFY_MODEL e o modelo de RACIOCINIO (deepseek-v4-flash, nao Flash-Lite) — fallback
+          # para DEDUP_MODEL. So roda quando ha thread zumbi + LLM + identidade que resolve.
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
+          VERIFY_MODEL: deepseek/deepseek-v4-flash
         run: npx tsx lib/post.ts /tmp/verdict.json

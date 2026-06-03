@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, changedFilesSince, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient, type CompareClient } from '../lib/github.js';
+import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, replyToReviewThread, changedFilesSince, getFileAtRef, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient, type CompareClient, type ContentClient } from '../lib/github.js';
 
 // resolveOctokitAuth e logica pura de SELECAO de auth (qual credencial usar), sem
 // tocar a rede. A montagem do Octokit (I/O / borda externa) fica em createOctokit,
@@ -115,6 +115,7 @@ describe('approveBestEffort', () => {
 // para a mutation; opcionalmente falha em um threadId especifico (testa allSettled).
 class FakeGraphqlClient implements GraphqlClient {
   public threadIdsResolvidos: string[] = [];
+  public repliesPostadas: Array<{ threadId: string; body: string }> = [];
   constructor(
     private readonly threadsPayload: ReviewThreadNode[] = [],
     private readonly threadIdQueFalha?: string,
@@ -126,6 +127,14 @@ class FakeGraphqlClient implements GraphqlClient {
         repository: { pullRequest: { reviewThreads: { nodes: this.threadsPayload } } },
       };
       return Promise.resolve(payload as T);
+    }
+    if (query.includes('addPullRequestReviewThreadReply')) {
+      const threadId = vars.threadId as string;
+      if (threadId === this.threadIdQueFalha) {
+        return Promise.reject(new Error(`reply na thread ${threadId} falhou`));
+      }
+      this.repliesPostadas.push({ threadId, body: vars.body as string });
+      return Promise.resolve({} as T);
     }
     const threadId = vars.threadId as string;
     this.threadIdsResolvidos.push(threadId);
@@ -150,21 +159,36 @@ interface ReviewThreadNode {
   comments: { nodes: Array<{ body: string }> };
 }
 
-// Helper: monta um node de review thread com o body do 1o comentario.
+// Helper: monta um node de review thread com o body do 1o comentario + replies opcionais.
 // path default 'a.ts' cobre os casos que nao se importam com o arquivo.
-function makeThread(id: string, isResolved: boolean, primeiroBody: string, path = 'a.ts', isOutdated = false, line: number | null = 12): ReviewThreadNode {
-  return { id, isResolved, path, line, isOutdated, comments: { nodes: [{ body: primeiroBody }] } };
+function makeThread(id: string, isResolved: boolean, primeiroBody: string, path = 'a.ts', isOutdated = false, line: number | null = 12, replies: string[] = []): ReviewThreadNode {
+  return { id, isResolved, path, line, isOutdated, comments: { nodes: [{ body: primeiroBody }, ...replies.map((b) => ({ body: b }))] } };
 }
 
 const target = { owner: 'o', repo: 'r', prNumber: 7 };
 const MARKER_NOSSO = '<!-- movvia-ai-review:seguranca:abc123def456 -->';
 
 describe('listFindingThreads', () => {
-  it('parseia { marker, threadId, path, line, isOutdated } das threads NOSSAS nao resolvidas', async () => {
+  it('parseia { marker, threadId, path, line, isOutdated, rootBody, hasOurReply } das threads NOSSAS', async () => {
     const corpoComMarker = `**P0** — Token hardcoded\n\nrationale\n\n${MARKER_NOSSO}`;
     const gql = new FakeGraphqlClient([makeThread('T1', false, corpoComMarker, 'conta.service.ts', true, 42)]);
     const threads = await listFindingThreads(gql, target);
-    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'conta.service.ts', line: 42, isOutdated: true }]);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'conta.service.ts', line: 42, isOutdated: true, rootBody: corpoComMarker, hasOurReply: false }]);
+  });
+
+  it('hasOurReply=true quando ha um reply NOSSO abaixo do root (anti-loop do reply P0)', async () => {
+    const root = `**P0** — x\n${MARKER_NOSSO}`;
+    const replyNosso = 'P0 nao fecha automaticamente\n<!-- movvia-ai-review:reply:abc123def456 -->';
+    const gql = new FakeGraphqlClient([makeThread('T1', false, root, 'a.ts', false, 12, [replyNosso])]);
+    const threads = await listFindingThreads(gql, target);
+    expect(threads[0]!.hasOurReply).toBe(true);
+  });
+
+  it('hasOurReply=false quando a reply abaixo e de um humano (sem nosso marker)', async () => {
+    const root = `**P0** — x\n${MARKER_NOSSO}`;
+    const gql = new FakeGraphqlClient([makeThread('T1', false, root, 'a.ts', false, 12, ['discordo, isso e intencional'])]);
+    const threads = await listFindingThreads(gql, target);
+    expect(threads[0]!.hasOurReply).toBe(false);
   });
 
   it('line null (linha removida do diff) vira -1 -> thread fica candidata a resolver', async () => {
@@ -191,7 +215,20 @@ describe('listFindingThreads', () => {
       makeThread('T3', false, 'sem marker'),
     ]);
     const threads = await listFindingThreads(gql, target);
-    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'mexido.ts', line: 12, isOutdated: false }]);
+    expect(threads).toEqual([{ marker: MARKER_NOSSO, threadId: 'T1', path: 'mexido.ts', line: 12, isOutdated: false, rootBody: `${MARKER_NOSSO}`, hasOurReply: false }]);
+  });
+});
+
+describe('replyToReviewThread', () => {
+  it('posta um reply na thread via addPullRequestReviewThreadReply', async () => {
+    const gql = new FakeGraphqlClient();
+    await replyToReviewThread(gql, 'T1', 'P0 nao fecha automaticamente');
+    expect(gql.repliesPostadas).toEqual([{ threadId: 'T1', body: 'P0 nao fecha automaticamente' }]);
+  });
+
+  it('erro na mutation NAO propaga (best-effort, espelha resolveOneThread)', async () => {
+    const gql = new FakeGraphqlClient([], 'T_FALHA');
+    await expect(replyToReviewThread(gql, 'T_FALHA', 'x')).resolves.toBeUndefined();
   });
 });
 
@@ -234,6 +271,39 @@ class FakeCompareClient implements CompareClient {
     },
   };
 }
+
+// Fake nomeado da borda repos.getContent: nao toca a rede. Devolve um payload pre-montado
+// e captura {path, ref} pedidos. O verificador de codigo le o arquivo no SHA do head por aqui.
+class FakeContentClient implements ContentClient {
+  public ultimo?: { path: string; ref: string };
+  constructor(private readonly resp: { data: { type?: string; content?: string } }) {}
+  repos = {
+    getContent: async (params: { owner: string; repo: string; path: string; ref: string }) => {
+      this.ultimo = { path: params.path, ref: params.ref };
+      return this.resp;
+    },
+  };
+}
+
+describe('getFileAtRef', () => {
+  it('decodifica o conteudo base64 do arquivo no ref pedido', async () => {
+    const conteudo = 'linha1\nlinha2 com codigo';
+    const b64 = Buffer.from(conteudo, 'utf8').toString('base64');
+    const fake = new FakeContentClient({ data: { type: 'file', content: b64 } });
+    expect(await getFileAtRef(fake, target, 'src/a.ts', 'sha1')).toBe(conteudo);
+    expect(fake.ultimo).toEqual({ path: 'src/a.ts', ref: 'sha1' });
+  });
+
+  it('tipo != file (diretorio) -> null', async () => {
+    const fake = new FakeContentClient({ data: { type: 'dir' } });
+    expect(await getFileAtRef(fake, target, 'x', 'sha')).toBeNull();
+  });
+
+  it('erro (404/sem permissao) -> null (chamador preserva, fail-closed)', async () => {
+    const fake: ContentClient = { repos: { getContent: async () => { throw new Error('Not Found'); } } };
+    expect(await getFileAtRef(fake, target, 'x', 'sha')).toBeNull();
+  });
+});
 
 describe('changedFilesSince', () => {
   it('compara baseSha...headSha e devolve os filenames do delta', async () => {
