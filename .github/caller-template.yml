@@ -2,6 +2,8 @@ name: AI Review
 on:
   pull_request: { types: [opened, synchronize, reopened] }
   issue_comment: { types: [created] }
+  # Dev RESPONDE uma thread inline -> judge-pushback avalia o argumento (fecha P1/P2 se valido).
+  pull_request_review_comment: { types: [created] }
 # Declarar permissions explicitamente: a org desabilita write por default no
 # GITHUB_TOKEN, e o reusable precisa postar review (pull-requests) + check run (checks).
 permissions:
@@ -25,4 +27,21 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number || github.event.issue.number }}
       full_review: ${{ contains(github.event.comment.body, '--full') }}
+    secrets: inherit
+
+  judge:
+    # Dispara so quando o dev RESPONDE uma thread inline (in_reply_to_id presente). Mesmo
+    # fork-guard do call (membro do repo). Anti-loop PRIMARIO: ignora replies que contem
+    # nosso marker (o reply do PROPRIO bot tambem dispara este evento) — o shouldJudge no
+    # entrypoint reforca por identidade. So o judge-pushback roda (pipeline fica skipped).
+    if: >-
+      github.event_name == 'pull_request_review_comment' &&
+      github.event.comment.in_reply_to_id &&
+      contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      !contains(github.event.comment.body, 'movvia-ai-review:')
+    uses: freeflowsoftware/movvia-ai-review/.github/workflows/ai-review.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      event: review_comment
+      comment_id: ${{ github.event.comment.id }}
     secrets: inherit

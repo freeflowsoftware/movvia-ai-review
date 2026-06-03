@@ -20,6 +20,15 @@ gatekeeper:
 verify:
   close_threshold: 0.9
   max_threads_per_run: 10
+# judge.*: o judge-pushback avalia o ARGUMENTO textual do dev numa thread. model =
+# modelo de RACIOCINIO (deepseek-v4-flash, nao Flash-Lite, que aceita retorica). max_replies
+# = circuit-breaker (apos N replies nossas na thread, escala/para). bot_login = identidade
+# usada no anti-loop (nao reage ao proprio reply). Lidos via env no entrypoint do judge.
+judge:
+  model: "deepseek/deepseek-v4-flash"
+  max_replies: 3
+  debounce_seconds: 90
+  bot_login: "movvia-ai-review[bot]"
 # context_pack.*: cotas do context-pack deterministico (lib/context-pack.ts), lidas pelo
 # context-pack-cli. max_tokens e o cap rigido do pack inteiro (corte por prioridade
 # alterado>irmaos>imports>exemplos); skeleton_loc_threshold skeletoniza arquivos grandes

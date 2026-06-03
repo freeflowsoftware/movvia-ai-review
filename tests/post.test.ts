@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent, reconcileInline, summaryRefFromComments, shouldReconcileByDelta } from '../lib/post.js';
+import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent, reconcileInline, summaryRefFromComments, shouldReconcileByDelta, suppressByWithdrawals } from '../lib/post.js';
 import type { ExistingThread } from '../lib/post.js';
 import { findingId } from '../lib/gatekeeper.js';
 import type { Finding, Verdict } from '../lib/types.js';
@@ -343,5 +343,24 @@ describe('reconcileInline por delta de arquivos (re-review incremental)', () => 
     };
     const { toPost } = reconcileInline([f], [], ['mexido.ts']);
     expect(toPost).toEqual([f]);
+  });
+});
+
+describe('suppressByWithdrawals', () => {
+  function f(file: string, category: string): Finding {
+    return { agent: 'seguranca', file, startLine: 10, endLine: 12, severity: 'P1', category, title: 't', rationale: 'r', suggestion: 's', cite: `${file}:10-12` };
+  }
+  it('suprime finding cujo findingId esta no Set de withdrawn', () => {
+    const withdrawn = f('a.ts', 'cred');
+    expect(suppressByWithdrawals([withdrawn], new Set([findingId(withdrawn)]))).toEqual([]);
+  });
+  it('NAO suprime category DIFERENTE no mesmo arquivo (findingId inclui category)', () => {
+    const cred = f('a.ts', 'cred');
+    const perf = f('a.ts', 'perf'); // mesma linha, outra category -> findingId diferente
+    expect(suppressByWithdrawals([cred, perf], new Set([findingId(cred)]))).toEqual([perf]);
+  });
+  it('Set vazio -> nada suprimido', () => {
+    const cred = f('a.ts', 'cred');
+    expect(suppressByWithdrawals([cred], new Set<string>())).toEqual([cred]);
   });
 });

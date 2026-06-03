@@ -5,6 +5,10 @@ on:
       pr_number:   { type: number, required: true }
       agents_dir:  { type: string, default: "agents" }
       full_review: { type: boolean, default: false }
+      # event = 'pull_request' (pipeline completo) | 'review_comment' (judge-pushback).
+      # comment_id so e usado quando event='review_comment' (o id do comentario do dev).
+      event:       { type: string, default: "pull_request" }
+      comment_id:  { type: string, required: false }
     secrets:
       LLM_API_KEY:            { required: true }
       LLM_BASE_URL:           { required: false }
@@ -27,14 +31,18 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
-# Serializa por PR: um push novo cancela o run velho. Fecha a corrida do verificador de
-# codigo lendo/fechando threads contra um estado obsoleto (o run sobrevivente le sempre o
-# head atual via getFileAtRef no SHA). cancel-in-progress: o ultimo commit e o que vale.
+# Grupo COMPARTILHADO por PR (sem o event): pipeline (push) e judge-pushback (review_comment)
+# do MESMO PR caem no mesmo group e SERIALIZAM as escritas do comentario withdrawals e das
+# threads (read-modify-write nao e atomico no GitHub). cancel-in-progress: false para NAO
+# matar um julgamento/pipeline em curso — enfileira. O verificador le sempre o head atual
+# via getFileAtRef no SHA, entao run enfileirado nao age contra estado obsoleto.
 concurrency:
   group: movvia-ai-review-pr-${{ inputs.pr_number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   gates:
+    # Pipeline completo so no evento de PR; no review_comment quem roda e o judge-pushback.
+    if: inputs.event != 'review_comment'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +82,9 @@ jobs:
           export PR_BODY="$(cat /tmp/body.txt)"
           gh pr diff ${{ inputs.pr_number }} --name-only | (cd _review && npx tsx lib/adr.ts)
   discover:
+    # Raiz da cadeia discover->context-pack->review->gatekeeper->post: skipped aqui
+    # propaga o skip aos dependentes (needs de job skipped nao roda) no review_comment.
+    if: inputs.event != 'review_comment'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
@@ -307,3 +318,41 @@ jobs:
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           VERIFY_MODEL: deepseek/deepseek-v4-flash
         run: npx tsx lib/post.ts /tmp/verdict.json
+
+  # Judge-pushback: caminho PARALELO ao pipeline, isolado por if. Reage ao dev RESPONDER
+  # uma thread (pull_request_review_comment). Avalia o argumento; valido fecha P1/P2 (store),
+  # nunca P0. Modelo de raciocinio (deepseek). Requer PAT/App (GITHUB_TOKEN nao resolve thread).
+  judge-pushback:
+    if: inputs.event == 'review_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      - run: npm i -g pnpm@9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --prefer-offline
+      # Debounce: coalesce rajadas de replies. Com cancel-in-progress:false o sleep enfileira.
+      - run: sleep 90
+      - name: Julgar pushback
+        env:
+          REVIEW_APP_ID: ${{ secrets.REVIEW_APP_ID }}
+          REVIEW_APP_PRIVATE_KEY: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
+          REVIEW_INSTALLATION_ID: ${{ secrets.REVIEW_INSTALLATION_ID }}
+          REVIEW_PAT: ${{ secrets.REVIEW_PAT }}
+          AI_REVIEW_REPO_TOKEN: ${{ secrets.AI_REVIEW_REPO_TOKEN }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
+          JUDGE_MODEL: deepseek/deepseek-v4-flash
+          BOT_LOGIN: ${{ vars.BOT_LOGIN || 'movvia-ai-review[bot]' }}
+          JUDGE_MAX_REPLIES: '3'
+          PR_NUMBER: ${{ inputs.pr_number }}
+          COMMENT_ID: ${{ inputs.comment_id }}
+          GH_REPO: ${{ github.repository }}
+        run: npx tsx lib/judge.ts

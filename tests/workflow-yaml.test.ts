@@ -161,10 +161,38 @@ describe('ai-review tem concurrency por PR (serializa o verificador de codigo)',
     readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
   ) as Workflow & { concurrency?: { group?: string; 'cancel-in-progress'?: boolean } };
 
-  it('grupo derivado de inputs.pr_number + cancel-in-progress true', () => {
+  it('grupo COMPARTILHADO por PR (sem o event) + cancel-in-progress false (serializa pipeline x judge)', () => {
+    // group sem o event -> pipeline (push) e judge (review_comment) do mesmo PR serializam
+    // as escritas do store/threads. false: nao mata um julgamento/pipeline em curso (enfileira).
     expect(wf.concurrency).toBeDefined();
     expect(String(wf.concurrency!.group)).toContain('inputs.pr_number');
-    expect(wf.concurrency!['cancel-in-progress']).toBe(true);
+    expect(String(wf.concurrency!.group)).not.toContain('event');
+    expect(wf.concurrency!['cancel-in-progress']).toBe(false);
+  });
+});
+
+describe('judge-pushback: caminho paralelo isolado por evento', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow & { jobs?: Record<string, { if?: string; steps?: Array<{ run?: string; env?: Record<string, string> }> }> };
+
+  it('o reusable aceita inputs event + comment_id', () => {
+    const inputs = (wf as unknown as { on?: { workflow_call?: { inputs?: Record<string, unknown> } } }).on?.workflow_call?.inputs ?? {};
+    expect(Object.keys(inputs)).toEqual(expect.arrayContaining(['event', 'comment_id']));
+  });
+
+  it('job judge-pushback so roda no review_comment; pipeline (gates/discover) so fora dele', () => {
+    expect(wf.jobs!['judge-pushback']?.if).toContain("inputs.event == 'review_comment'");
+    expect(wf.jobs!.gates?.if).toContain("inputs.event != 'review_comment'");
+    expect(wf.jobs!.discover?.if).toContain("inputs.event != 'review_comment'");
+  });
+
+  it('judge-pushback roda lib/judge.ts com JUDGE_MODEL de raciocinio (deepseek)', () => {
+    const steps = wf.jobs!['judge-pushback']?.steps ?? [];
+    const judgeStep = steps.find((s) => (s.run ?? '').includes('lib/judge.ts'));
+    expect(judgeStep).toBeDefined();
+    expect(String(judgeStep!.env!.JUDGE_MODEL)).toBe('deepseek/deepseek-v4-flash');
+    expect(Object.keys(judgeStep!.env!)).toEqual(expect.arrayContaining(['COMMENT_ID', 'LLM_API_KEY']));
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, replyToReviewThread, changedFilesSince, getFileAtRef, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient, type CompareClient, type ContentClient } from '../lib/github.js';
+import { resolveOctokitAuth, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, replyToReviewThread, changedFilesSince, getFileAtRef, pickThreadByComment, type GithubCredentials, type ReviewClient, type ReviewEvent, type ReviewPoster, type ReviewInlineComment, type GraphqlClient, type CompareClient, type ContentClient } from '../lib/github.js';
 
 // resolveOctokitAuth e logica pura de SELECAO de auth (qual credencial usar), sem
 // tocar a rede. A montagem do Octokit (I/O / borda externa) fica em createOctokit,
@@ -284,6 +284,25 @@ class FakeContentClient implements ContentClient {
     },
   };
 }
+
+describe('pickThreadByComment', () => {
+  const nodes = [
+    { id: 'TA', isResolved: false, path: 'a.ts', line: 10, comments: { nodes: [{ databaseId: 1, body: 'root A', author: { login: 'bot' } }, { databaseId: 2, body: 'pushback', author: { login: 'dev' } }] } },
+    { id: 'TB', isResolved: false, path: 'b.ts', line: 20, comments: { nodes: [{ databaseId: 3, body: 'root B', author: null }] } },
+  ];
+  it('acha a thread que CONTEM o commentId do evento + monta rootBody/comments', () => {
+    const t = pickThreadByComment(nodes, 2);
+    expect(t?.threadId).toBe('TA');
+    expect(t?.rootBody).toBe('root A');
+    expect(t?.comments[1]?.authorLogin).toBe('dev');
+  });
+  it('author null -> authorLogin "" (sem quebrar)', () => {
+    expect(pickThreadByComment(nodes, 3)?.comments[0]?.authorLogin).toBe('');
+  });
+  it('commentId inexistente -> null', () => {
+    expect(pickThreadByComment(nodes, 99)).toBeNull();
+  });
+});
 
 describe('getFileAtRef', () => {
   it('decodifica o conteudo base64 do arquivo no ref pedido', async () => {

@@ -35,6 +35,16 @@ export function findingMarker(f: Finding): string {
   return `<!-- movvia-ai-review:${f.agent}:${findingId(f)} -->`;
 }
 
+/**
+ * Suprime findings WITHDRAWN (o dev contestou com argumento válido via judge-pushback).
+ * Por `findingId` EXATO (inclui category) — não proximidade: `cred` withdrawn NÃO suprime
+ * `perf` na mesma linha/região. Aplicado ANTES da reconciliação: um finding withdrawn
+ * nunca vira inline novo (toPost) nem reabre/reconcilia thread no re-review.
+ */
+export function suppressByWithdrawals(findings: Finding[], withdrawnIds: Set<string>): Finding[] {
+  return findings.filter((f) => !withdrawnIds.has(findingId(f)));
+}
+
 /** Comentario inline pronto para pulls.createReview (path + linha + corpo). */
 export interface InlineComment {
   path: string;
@@ -261,8 +271,10 @@ if (process.argv[1]?.endsWith('post.ts')) {
   const { readFileSync } = await import('node:fs');
   const { join } = await import('node:path');
   const { createOctokit, emitCheckRun, approveBestEffort, postReview, listFindingThreads, resolveReviewThreads, replyToReviewThread, getFileAtRef, changedFilesSince } = await import('./github.js');
+  const { parseWithdrawals, buildWithdrawalsComment, computeValidWithdrawals, withdrawalsMarker } = await import('./withdrawals.js');
+  const { decideVerdict } = await import('./gatekeeper.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
-  const { verdict, findings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
+  const { verdict: rawVerdict, findings: rawFindings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
   const prNumber = Number(process.env.PR_NUMBER);
   // Auth via GitHub App (REVIEW_APP_ID/REVIEW_APP_PRIVATE_KEY/REVIEW_INSTALLATION_ID)
@@ -296,6 +308,36 @@ if (process.argv[1]?.endsWith('post.ts')) {
     : octokit;
   const pr = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
   const sha = pr.data.head.sha;
+  // STORE DE WITHDRAWALS: suprime findings que o dev CONTESTOU com argumento valido
+  // (judge-pushback). Invalida os withdrawals cujo arquivo mudou desde o acceptedSha (o
+  // argumento era sobre o codigo antigo -> o finding volta a valer). Re-escreve o store
+  // quando algo expira. O verdict e RECOMPUTADO sobre os findings vivos (um P1 contestado
+  // deixa de bloquear). P0 nunca entra no store (upsertWithdrawal rejeita).
+  const allComments = (await octokit.issues.listComments({ owner, repo, issue_number: prNumber })).data;
+  const wComment = allComments.find((c) => c.body?.includes(withdrawalsMarker));
+  const wEntries = wComment ? parseWithdrawals(wComment.body ?? '') : [];
+  let withdrawnIds = new Set<string>();
+  if (wEntries.length > 0) {
+    const deltaPorSha = new Map<string, Set<string> | null>();
+    for (const acceptedSha of new Set(wEntries.map((e) => e.acceptedSha))) {
+      try {
+        deltaPorSha.set(acceptedSha, new Set(await changedFilesSince(octokit, { owner, repo, prNumber }, acceptedSha, sha)));
+      } catch {
+        deltaPorSha.set(acceptedSha, null); // nao computou -> conservador (expira)
+      }
+    }
+    const fileMudou = (file: string, acceptedSha: string) => {
+      const d = deltaPorSha.get(acceptedSha);
+      return d ? d.has(file) : true;
+    };
+    const { validIds, survivors } = computeValidWithdrawals(wEntries, fileMudou);
+    withdrawnIds = validIds;
+    if (wComment && survivors.length !== wEntries.length) {
+      await octokit.issues.updateComment({ owner, repo, comment_id: wComment.id, body: buildWithdrawalsComment(survivors) });
+    }
+  }
+  const findings = suppressByWithdrawals(rawFindings, withdrawnIds);
+  const verdict = withdrawnIds.size > 0 ? decideVerdict(findings) : rawVerdict;
   const summary = buildSummary(findings, verdict, sha);
   await emitCheckRun(octokit, { owner, repo, prNumber }, sha, verdict.conclusion, summary);
   // Idempotencia: re-run num mesmo PR atualiza o resumo existente em vez de empilhar

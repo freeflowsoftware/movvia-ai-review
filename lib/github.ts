@@ -378,6 +378,52 @@ export async function getFileAtRef(octokit: ContentClient, t: PostTarget, path: 
   }
 }
 
+const JUDGE_THREADS_QUERY = `
+  query($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes { id isResolved path line comments(first: 50) { nodes { databaseId body author { login } } } }
+        }
+      }
+    }
+  }`;
+
+interface JudgeThreadNode {
+  id: string;
+  isResolved: boolean;
+  path: string;
+  line: number | null;
+  comments: { nodes: Array<{ databaseId: number; body: string; author: { login: string } | null }> };
+}
+interface JudgeThreadsResponse {
+  repository: { pullRequest: { reviewThreads: { nodes: JudgeThreadNode[] } } };
+}
+
+/** Uma review thread vista pelo judge: comentarios com id/author para montar o dossiê. */
+export interface JudgeThread {
+  threadId: string;
+  path: string;
+  line: number;
+  isResolved: boolean;
+  rootBody: string;
+  comments: Array<{ databaseId: number; body: string; authorLogin: string }>;
+}
+
+/** PURO: acha a thread que CONTÉM o comentário do evento (databaseId == commentId). */
+export function pickThreadByComment(nodes: JudgeThreadNode[], commentId: number): JudgeThread | null {
+  const node = nodes.find((n) => n.comments.nodes.some((c) => c.databaseId === commentId));
+  if (!node) return null;
+  const comments = node.comments.nodes.map((c) => ({ databaseId: c.databaseId, body: c.body, authorLogin: c.author?.login ?? '' }));
+  return { threadId: node.id, path: node.path, line: node.line ?? -1, isResolved: node.isResolved, rootBody: comments[0]?.body ?? '', comments };
+}
+
+/** Borda externa: busca a thread do comentário do evento pull_request_review_comment. */
+export async function fetchThreadByComment(gql: GraphqlClient, t: PostTarget, commentId: number): Promise<JudgeThread | null> {
+  const data = await gql.graphql<JudgeThreadsResponse>(JUDGE_THREADS_QUERY, { owner: t.owner, repo: t.repo, pr: t.prNumber });
+  return pickThreadByComment(data.repository.pullRequest.reviewThreads.nodes, commentId);
+}
+
 /** Cria um check run review-bot/verdict. Borda externa: nao coberto por unit test. */
 export async function emitCheckRun(
   octokit: Octokit,
