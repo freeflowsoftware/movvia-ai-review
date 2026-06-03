@@ -1,7 +1,8 @@
 ---
 name: regressao
 dimension: regression
-model: ""
+# Dimensao de raciocinio (delecao nao-relacionada, dead code, import fantasma) -> DeepSeek.
+model: "deepseek/deepseek-v4-flash"
 paths: ["**/*"]
 severity_hints:
   P0: "delecao de codigo nao relacionado ao objetivo do PR; error handling enfraquecido em caminho financeiro"

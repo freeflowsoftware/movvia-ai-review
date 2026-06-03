@@ -189,10 +189,9 @@ jobs:
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           AGENT_NAME: ${{ matrix.name }}
           AGENT_MODEL: ${{ matrix.model }}
-          # TESTE "tudo DeepSeek": default dos agentes (model:"" no frontmatter) vira
-          # DeepSeek V4 Flash em vez de Gemini Flash-Lite. agents/seguranca.md ja fixa
-          # deepseek; aqui os demais herdam. Reverter removendo esta linha (volta ao misto).
-          DEFAULT_MODEL: deepseek/deepseek-v4-flash
+          # Modelo por dimensao: default = Gemini Flash-Lite (barato/rapido); agentes de
+          # RACIOCINIO (seguranca/regressao/arquitetura) fixam deepseek-v4-flash no proprio
+          # frontmatter. Sem DEFAULT_MODEL global de DeepSeek (que inflava o gatekeeper).
           # FIX F6: o agente de requisitos precisa da US do Jira. PR_TITLE alimenta a
           # extracao da chave (lib/jira.ts) e os secrets Jira liberam a busca do contexto.
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
@@ -250,8 +249,8 @@ jobs:
           # DEDUP_MODEL: modelo melhor para a consolidacao semantica final (consolidateFindings
           # em lib/gatekeeper.ts). Sobrescreve o default deepseek/deepseek-v4-flash do codigo.
           DEDUP_MODEL: deepseek/deepseek-v4-flash
-          # TESTE "tudo DeepSeek": o refuter adversarial tambem usa DeepSeek (em vez de Flash-Lite).
-          DEFAULT_MODEL: deepseek/deepseek-v4-flash
+          # Sem DEFAULT_MODEL: o refuter adversarial volta ao Flash-Lite (rapido). Era o
+          # gargalo de tempo (gatekeeper 188s) quando o refuter rodava em DeepSeek por finding.
         run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff /tmp/context-pack/context-pack.json > /tmp/verdict.json
       - uses: actions/upload-artifact@v4
         with: { name: verdict, path: /tmp/verdict.json }

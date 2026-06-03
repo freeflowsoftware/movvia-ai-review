@@ -1,7 +1,8 @@
 ---
 name: arquitetura
 dimension: architecture
-model: ""
+# Dimensao de raciocinio (camadas, SRP/KISS, lock sem finally, dep nao usada) -> DeepSeek.
+model: "deepseek/deepseek-v4-flash"
 paths: ["**/*"]
 severity_hints:
   P1: "violacao de camada (Hexagonal nos Java: domain importando adapter); god service Nest >500 LOC ou >7 deps; interface criada com 1 so implementacao"
