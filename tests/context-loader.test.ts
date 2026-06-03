@@ -4,6 +4,7 @@ import {
   buildPrompt,
   buildSystemPrompt,
   buildUserPrompt,
+  agentMatchesPaths,
 } from '../lib/context-loader.js';
 import type { AgentSpec } from '../lib/types.js';
 
@@ -86,6 +87,39 @@ describe('buildSystemPrompt', () => {
     const s = buildSystemPrompt(SPEC);
     expect(s).not.toContain('## DIFF DO PR');
     expect(s).not.toContain('## Regras do repositorio alvo');
+  });
+
+  // Especializacao forte: o system prompt trava o agente na sua dimensao. Antes os agentes
+  // reportavam problemas de outras dimensoes (off-dimension), poluindo o veredicto. Estes
+  // asserts garantem que a dimensao e citada e a regra de exclusividade esta presente.
+  it('cita a dimensao e a regra de exclusividade (reporte SOMENTE a sua dimensao)', () => {
+    const s = buildSystemPrompt(SPEC);
+    expect(s).toContain('EXCLUSIVAMENTE o revisor da dimensao performance');
+    expect(s).toContain('Reporte SOMENTE problemas desta dimensao');
+    expect(s).toContain('retorne findings vazio []');
+    expect(s).toContain('melhor zero findings que findings fora da sua dimensao');
+  });
+
+  // A dimensao usada e spec.dimension (nao spec.name): para um agente onde nome e dimensao
+  // divergem, o bloco de exclusividade deve seguir a dimensao.
+  it('usa spec.dimension (nao spec.name) no bloco de exclusividade', () => {
+    const s = buildSystemPrompt({ ...SPEC, name: 'perf', dimension: 'performance' });
+    expect(s).toContain('EXCLUSIVAMENTE o revisor da dimensao performance');
+  });
+});
+
+describe('agentMatchesPaths', () => {
+  it('casa quando algum arquivo casa algum glob', () => {
+    expect(agentMatchesPaths(['src/conta.service.ts'], ['**/*.service.ts'])).toBe(true);
+  });
+  it('nao casa quando nenhum arquivo bate os globs', () => {
+    expect(agentMatchesPaths(['README.md'], ['**/*.service.ts', '**/*.ts'])).toBe(false);
+  });
+  it('o glob **/* casa qualquer arquivo', () => {
+    expect(agentMatchesPaths(['qualquer/caminho/arquivo.py'], ['**/*'])).toBe(true);
+  });
+  it('retorna false sem arquivos alterados', () => {
+    expect(agentMatchesPaths([], ['**/*'])).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
-import { detectLanguages, buildSystemPrompt, buildUserPrompt } from './context-loader.js';
+import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
 import { runAgent, realChatRunner } from './run-agent.js';
 import { ADR_GLOBS } from './adr.js';
 import {
@@ -86,6 +86,13 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   const diff = readFileSync(diffPath, 'utf8');
   // matchAll devolve grupos string|undefined; o regex casa => m[1] sempre presente.
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? '');
+  // Roteamento por paths: se o diff nao toca nenhum glob do agente, emite findings vazio
+  // e NAO chama o LLM (economia de tokens + evita findings off-dimension de um agente que
+  // nem deveria rodar neste PR). Sai antes de montar prompt/buscar Jira.
+  if (!agentMatchesPaths(changedFiles, spec.paths)) {
+    process.stdout.write(JSON.stringify({ agent: spec.name, findings: [] }));
+    process.exit(0);
+  }
   const ticket = await loadJiraTicket(process.env);
   // Split system/user: a persona da dimensao vira SYSTEM (foca o agente), o contexto do
   // PR vira USER. Antes era um prompt unico passado ao opencode run.

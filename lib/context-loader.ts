@@ -1,3 +1,4 @@
+import { minimatch } from 'minimatch';
 import type { AgentSpec } from './types.js';
 import type { JiraTicket } from './jira.js';
 
@@ -44,16 +45,38 @@ function jiraSection(ticket: JiraTicket | undefined): string[] {
 }
 
 /**
- * SYSTEM prompt: a persona da dimensao + calibracao de severidade + as INSTRUCOES
- * OBRIGATORIAS (schema JSON camelCase, citar linha, PT-BR). Vai como role:'system' na
- * chat-completion para o modelo fixar a persona da dimensao e nao diluir o foco — antes
- * isso ia junto do contexto num prompt unico e o agente perdia identidade.
+ * Bloco de EXCLUSIVIDADE da dimensao. Vai no topo do system prompt para travar o agente
+ * na sua dimensao: cada revisor reportava problemas de outras dimensoes (credencial
+ * hardcoded aparecia no agente de performance, `any` aparecia no de requisitos), gerando
+ * findings off-dimension que poluem o veredicto. A regra e dura de proposito — "melhor
+ * zero findings que findings fora da sua dimensao" — porque o gatekeeper depois dedupa e
+ * a sobreposicao entre agentes so adiciona ruido, nunca recall.
+ */
+function exclusivityBlock(dimension: string): string[] {
+  return [
+    '## EXCLUSIVIDADE DA SUA DIMENSAO (REGRA DURA)',
+    `Voce e EXCLUSIVAMENTE o revisor da dimensao ${dimension}. Reporte SOMENTE problemas desta dimensao.`,
+    'Se um problema pertence a outra dimensao (ex: credencial hardcoded e SEGURANCA, nao performance;',
+    'tipo any e ARQUITETURA/qualidade, nao requisitos), NAO reporte.',
+    `Se nao houver problema da SUA dimensao (${dimension}) no diff, retorne findings vazio [].`,
+    'E melhor zero findings que findings fora da sua dimensao.',
+  ];
+}
+
+/**
+ * SYSTEM prompt: o bloco de exclusividade da dimensao + a persona + calibracao de
+ * severidade + as INSTRUCOES OBRIGATORIAS (schema JSON camelCase, citar linha, PT-BR).
+ * Vai como role:'system' na chat-completion para o modelo fixar a persona da dimensao e
+ * nao diluir o foco — antes isso ia junto do contexto num prompt unico e o agente perdia
+ * identidade, alem de reportar problemas de outras dimensoes.
  */
 export function buildSystemPrompt(spec: AgentSpec): string {
   const hints = Object.entries(spec.severityHints)
     .map(([k, v]) => `- ${k}: ${v}`)
     .join('\n');
   return [
+    ...exclusivityBlock(spec.dimension),
+    '',
     spec.persona,
     '',
     '## Calibracao de severidade',
@@ -67,6 +90,16 @@ export function buildSystemPrompt(spec: AgentSpec): string {
     '- Saida: UNICO objeto JSON, sem texto fora do JSON, EXATAMENTE neste schema (nomes de campo em camelCase):',
     '  {"agent":"<nome>","findings":[{"file":"caminho","startLine":N,"endLine":N,"severity":"P0|P1|P2","category":"slug","title":"...","rationale":"...","suggestion":"...","cite":"caminho:N-N"}]}',
   ].join('\n');
+}
+
+/**
+ * Roteamento por paths: true se ALGUM arquivo alterado casa ALGUM glob do agente.
+ * Usado pelo CLI para nao chamar o LLM em agentes cujos paths nao tocam o diff (economia
+ * de tokens + evita findings off-dimension de quem nao deveria nem rodar). O glob ['**\/*']
+ * casa tudo via minimatch, entao agentes "globais" continuam rodando sempre.
+ */
+export function agentMatchesPaths(changedFiles: string[], paths: string[]): boolean {
+  return changedFiles.some((file) => paths.some((glob) => minimatch(file, glob)));
 }
 
 /**
