@@ -1,7 +1,10 @@
 ---
 name: seguranca
 dimension: security
-model: ""
+# Modelo por dimensao: seguranca exige raciocinio sutil (ex: vazamento cross-tenant por
+# omissao de filtro) que o Flash-Lite barato erra. DeepSeek V4 Flash raciocina melhor e
+# segue barato. Os demais agentes ficam no default (Flash-Lite) — so a dimensao critica sobe.
+model: "deepseek/deepseek-v4-flash"
 paths: ["**/*"]
 severity_hints:
   P0: "credencial/token hardcoded; operacao financeira (saldo/pagamento/recarga) sem LockService; SQL injection; auth/authz ausente em rota sensivel; ISOLAMENTO MULTI-TENANT QUEBRADO: endpoint/consulta autenticada que le/conta/lista/agrega dados (prisma count/findMany/findFirst/aggregate/groupBy) SEM filtrar pelo cliente_id/usuario do token = vazamento de dados entre clientes (BOLA/IDOR, OWASP A01)"
