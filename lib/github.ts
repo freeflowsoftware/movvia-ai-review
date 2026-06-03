@@ -99,16 +99,29 @@ export interface ReviewPoster {
       body: string;
       comments: ReviewInlineComment[];
     }): Promise<unknown>;
+    // Fallback inline-a-inline quando o createReview em lote e recusado: posta UM
+    // comentario por vez para que um inline invalido nao derrube os demais.
+    createReviewComment(params: {
+      owner: string;
+      repo: string;
+      pull_number: number;
+      commit_id: string;
+      path: string;
+      line: number;
+      body: string;
+    }): Promise<unknown>;
   };
 }
 
 /**
- * Borda externa: posta UMA review formal carregando o resumo (body) + os
- * comentarios inline ancorados na linha. Diferencial do prototipo /revisar-pr.
+ * Borda externa: posta UMA review formal carregando o resumo (body) + os comentarios
+ * inline. Diferencial do prototipo /revisar-pr.
  *
- * Um unico createReview agrupa todos os inline numa thread de review (em vez de N
- * createReviewComment soltos), e o `event` (APPROVE/REQUEST_CHANGES) carrega o
- * veredicto junto. commit_id fixa as ancoras no SHA exato revisado.
+ * TOLERANCIA A 422: createReview e ATOMICO — um unico inline com `line`/`path` que o
+ * GitHub nao consegue ancorar ("Line/Path could not be resolved") derruba a review
+ * INTEIRA (some o resumo, o veredicto e TODOS os inline). Em PR grande isso e provavel.
+ * Fallback: posta o resumo+veredicto SEM inline (garante check/resumo) e depois cada
+ * inline individual, pulando os que o GitHub recusa (logado, best-effort).
  */
 export async function postReview(
   poster: ReviewPoster,
@@ -118,15 +131,21 @@ export async function postReview(
   summaryBody: string,
   inlineComments: ReviewInlineComment[],
 ): Promise<void> {
-  await poster.pulls.createReview({
-    owner: t.owner,
-    repo: t.repo,
-    pull_number: t.prNumber,
-    commit_id: sha,
-    event,
-    body: summaryBody,
-    comments: inlineComments,
-  });
+  const base = { owner: t.owner, repo: t.repo, pull_number: t.prNumber, commit_id: sha };
+  try {
+    await poster.pulls.createReview({ ...base, event, body: summaryBody, comments: inlineComments });
+    return;
+  } catch (e) {
+    console.log(`createReview em lote falhou (${(e as Error).message}); fallback inline-a-inline.`);
+  }
+  await poster.pulls.createReview({ ...base, event, body: summaryBody, comments: [] });
+  for (const c of inlineComments) {
+    try {
+      await poster.pulls.createReviewComment({ ...base, path: c.path, line: c.line, body: c.body });
+    } catch (err) {
+      console.log(`inline pulado ${c.path}:${c.line} — ${(err as Error).message}`);
+    }
+  }
 }
 
 /**

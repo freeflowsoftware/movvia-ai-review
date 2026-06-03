@@ -44,15 +44,12 @@ class FakeReviewClient implements ReviewClient {
   };
 }
 
-// Fake nomeado da borda externa (pulls.createReview com inline comments): captura
-// os parametros para asserir que postReview agrupa resumo + inline numa unica review.
+// Fake nomeado da borda externa: captura reviews e inline individuais. `failBatch`
+// simula o 422 "Line could not be resolved" do createReview em lote (inline invalido).
 class FakeReviewPoster implements ReviewPoster {
-  public ultimaChamada?: {
-    commit_id: string;
-    event: ReviewEvent;
-    body: string;
-    comments: ReviewInlineComment[];
-  };
+  public reviews: Array<{ commit_id: string; event: ReviewEvent; body: string; comments: ReviewInlineComment[] }> = [];
+  public inlineComments: Array<{ path: string; line: number; body: string }> = [];
+  constructor(private readonly failBatch = false) {}
   pulls = {
     createReview: async (params: {
       commit_id: string;
@@ -60,7 +57,13 @@ class FakeReviewPoster implements ReviewPoster {
       body: string;
       comments: ReviewInlineComment[];
     }): Promise<void> => {
-      this.ultimaChamada = params;
+      if (this.failBatch && params.comments.length > 0) {
+        throw new Error('Unprocessable Entity: "Line could not be resolved"');
+      }
+      this.reviews.push(params);
+    },
+    createReviewComment: async (params: { path: string; line: number; body: string }): Promise<void> => {
+      this.inlineComments.push({ path: params.path, line: params.line, body: params.body });
     },
   };
 }
@@ -70,10 +73,25 @@ describe('postReview', () => {
     const fake = new FakeReviewPoster();
     const inline: ReviewInlineComment[] = [{ path: 'a.ts', line: 12, body: 'corpo' }];
     await postReview(fake, { owner: 'o', repo: 'r', prNumber: 7 }, 'abc1234', 'REQUEST_CHANGES', 'resumo', inline);
-    expect(fake.ultimaChamada?.commit_id).toBe('abc1234');
-    expect(fake.ultimaChamada?.event).toBe('REQUEST_CHANGES');
-    expect(fake.ultimaChamada?.body).toBe('resumo');
-    expect(fake.ultimaChamada?.comments).toEqual(inline);
+    expect(fake.reviews).toHaveLength(1);
+    expect(fake.reviews[0]!.commit_id).toBe('abc1234');
+    expect(fake.reviews[0]!.event).toBe('REQUEST_CHANGES');
+    expect(fake.reviews[0]!.comments).toEqual(inline);
+    expect(fake.inlineComments).toHaveLength(0);
+  });
+
+  it('fallback: se a review em lote falha (422), posta resumo sem inline + cada inline individual', async () => {
+    const fake = new FakeReviewPoster(true); // failBatch
+    const inline: ReviewInlineComment[] = [
+      { path: 'a.ts', line: 12, body: 'c1' },
+      { path: 'b.ts', line: 5, body: 'c2' },
+    ];
+    await postReview(fake, { owner: 'o', repo: 'r', prNumber: 7 }, 'sha', 'COMMENT', 'resumo', inline);
+    // 1 review do resumo SEM inline (comments vazio) — garante check/veredicto.
+    expect(fake.reviews).toHaveLength(1);
+    expect(fake.reviews[0]!.comments).toEqual([]);
+    // e cada inline postado individualmente.
+    expect(fake.inlineComments).toEqual(inline);
   });
 });
 
