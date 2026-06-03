@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent } from '../lib/post.js';
+import { summaryMarker, parseSummarySha, findingMarker, buildSummary, buildInlineComments, decideReviewEvent, reconcileInline } from '../lib/post.js';
+import type { ExistingThread } from '../lib/post.js';
 import { findingId } from '../lib/gatekeeper.js';
 import type { Finding, Verdict } from '../lib/types.js';
 
@@ -86,5 +87,60 @@ describe('buildSummary', () => {
     expect(s).toContain('1 P0');
     expect(s).toContain('Mudancas necessarias');
     expect(s).toContain(summaryMarker('abc1234'));
+  });
+});
+
+describe('reconcileInline', () => {
+  // Helper: monta um finding distinto (file/category controlam o findingMarker).
+  function makeFinding(file: string, category: string): Finding {
+    return {
+      agent: 'seguranca', file, startLine: 10, endLine: 12, severity: 'P1',
+      category, title: 't', rationale: 'r', suggestion: 's', cite: `${file}:10-12`,
+    };
+  }
+  // Helper: simula uma thread inline NOSSA ja postada (marker extraido do corpo + id).
+  function existingFor(f: Finding, threadId: string): ExistingThread {
+    return { marker: findingMarker(f), threadId };
+  }
+
+  it('(a) finding novo (sem thread) entra em toPost', () => {
+    const novo = makeFinding('novo.ts', 'cred');
+    const { toPost, toResolveThreadIds } = reconcileInline([novo], []);
+    expect(toPost).toEqual([novo]);
+    expect(toResolveThreadIds).toEqual([]);
+  });
+
+  it('(b) finding com comentario existente (mesmo marker) nao re-posta', () => {
+    const persistente = makeFinding('persiste.ts', 'cred');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [persistente],
+      [existingFor(persistente, 'T1')],
+    );
+    // Marker em ambos -> nem re-posta (dedup) nem resolve (continua pendente).
+    expect(toPost).toEqual([]);
+    expect(toResolveThreadIds).toEqual([]);
+  });
+
+  it('(c) marker existente que sumiu dos findings -> threadId em toResolve', () => {
+    // O dev corrigiu o problema: o finding desapareceu, entao a thread fecha.
+    const corrigido = makeFinding('corrigido.ts', 'cred');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [],
+      [existingFor(corrigido, 'T9')],
+    );
+    expect(toPost).toEqual([]);
+    expect(toResolveThreadIds).toEqual(['T9']);
+  });
+
+  it('(d) caso misto: novo posta, persistente fica, corrigido resolve', () => {
+    const persistente = makeFinding('persiste.ts', 'cred');
+    const corrigido = makeFinding('corrigido.ts', 'perf');
+    const novo = makeFinding('novo.ts', 'lock');
+    const { toPost, toResolveThreadIds } = reconcileInline(
+      [persistente, novo],
+      [existingFor(persistente, 'T1'), existingFor(corrigido, 'T2')],
+    );
+    expect(toPost).toEqual([novo]);
+    expect(toResolveThreadIds).toEqual(['T2']);
   });
 });

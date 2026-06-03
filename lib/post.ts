@@ -41,6 +41,41 @@ export interface InlineComment {
   body: string;
 }
 
+/**
+ * Um comentario inline NOSSO ja postado no PR: o `findingMarker` extraido do corpo
+ * (ancora estavel de dedup) + o id da review thread (para resolver no GraphQL). A
+ * borda que lista as threads e injetada de fora; reconcileInline so recebe este par.
+ */
+export interface ExistingThread {
+  marker: string;
+  threadId: string;
+}
+
+/**
+ * Reconciliacao PURA do re-review (sem I/O): decide o que postar e o que fechar a
+ * partir dos findings ATUAIS e das threads que JA postamos. Sem ela o post duplica
+ * inline a cada run e nunca resolve o que o dev corrigiu (TODO de post.ts).
+ *
+ * - toPost: findings cujo marker NAO existe em nenhuma thread -> sao novos.
+ * - toResolveThreadIds: threads cujo marker SUMIU dos findings -> o dev corrigiu.
+ * - finding que persiste (marker em ambos): nem re-posta nem resolve (segue pendente).
+ *
+ * Ancora no findingMarker (e nao na linha crua) para sobreviver a deslocamento de
+ * linha — mesma garantia de idempotencia documentada em findingMarker/findingId.
+ */
+export function reconcileInline(
+  findings: Finding[],
+  existing: ExistingThread[],
+): { toPost: Finding[]; toResolveThreadIds: string[] } {
+  const markersExistentes = new Set(existing.map((t) => t.marker));
+  const markersAtuais = new Set(findings.map(findingMarker));
+  const toPost = findings.filter((f) => !markersExistentes.has(findingMarker(f)));
+  const toResolveThreadIds = existing
+    .filter((t) => !markersAtuais.has(t.marker))
+    .map((t) => t.threadId);
+  return { toPost, toResolveThreadIds };
+}
+
 function buildInlineBody(f: Finding): string {
   // Carrega tudo que o autor humano precisa para agir e termina com o marker
   // invisivel — ancora estavel de dedup idempotente entre re-runs (findingMarker).
