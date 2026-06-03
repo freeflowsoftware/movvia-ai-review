@@ -168,9 +168,13 @@ interface ReviewThreadsResponse {
           // path do arquivo onde a thread ancorou — usado pelo re-review por delta
           // (reconciliar so os arquivos que o dev mexeu, preservando os demais).
           path: string;
+          // line = posicao ATUAL da thread no head (re-ancorada pelo GitHub). Chave da
+          // reconciliacao por proximidade (casa finding<->thread por path+linha+-LINE_PROX),
+          // robusta ao marker nao-deterministico. Pode vir null (linha removida do diff).
+          line: number | null;
           // isOutdated = a linha que a thread ancora mudou desde que postamos. Gate de
           // resolucao: so fechamos uma thread se o dev mexeu na linha (nunca por o modelo
-          // ter deixado de re-gerar o marker num re-review nao-deterministico).
+          // ter deixado de re-detectar num re-review nao-deterministico).
           isOutdated: boolean;
           comments: { nodes: Array<{ body: string }> };
         }>;
@@ -184,7 +188,7 @@ const REVIEW_THREADS_QUERY = `
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $pr) {
         reviewThreads(first: 100) {
-          nodes { id isResolved isOutdated path comments(first: 1) { nodes { body } } }
+          nodes { id isResolved isOutdated path line comments(first: 1) { nodes { body } } }
         }
       }
     }
@@ -215,7 +219,7 @@ const FINDING_MARKER_PATTERN = /<!-- movvia-ai-review:[^>]+ -->/;
 export async function listFindingThreads(
   gql: GraphqlClient,
   t: PostTarget,
-): Promise<Array<{ marker: string; threadId: string; path: string; isOutdated: boolean }>> {
+): Promise<Array<{ marker: string; threadId: string; path: string; line: number; isOutdated: boolean }>> {
   const data = await gql.graphql<ReviewThreadsResponse>(REVIEW_THREADS_QUERY, {
     owner: t.owner,
     repo: t.repo,
@@ -226,14 +230,19 @@ export async function listFindingThreads(
   return naoResolvidas.flatMap(parseFindingThread);
 }
 
-/** Extrai marker + path + isOutdated do 1o comentario; lista vazia descarta sem marker nosso. */
+/**
+ * Extrai marker + path + line + isOutdated do 1o comentario; lista vazia descarta as
+ * sem marker nosso. `line` null (linha removida do diff) vira -1: nunca casa por
+ * proximidade (findingLine >= 1), entao a thread fica candidata a resolver — coerente,
+ * pois a linha que a originou sumiu.
+ */
 function parseFindingThread(
-  thread: { id: string; path: string; isOutdated: boolean; comments: { nodes: Array<{ body: string }> } },
-): Array<{ marker: string; threadId: string; path: string; isOutdated: boolean }> {
+  thread: { id: string; path: string; line: number | null; isOutdated: boolean; comments: { nodes: Array<{ body: string }> } },
+): Array<{ marker: string; threadId: string; path: string; line: number; isOutdated: boolean }> {
   const primeiroComentario = thread.comments.nodes[0]?.body ?? '';
   const marker = FINDING_MARKER_PATTERN.exec(primeiroComentario)?.[0];
   if (!marker) return [];
-  return [{ marker, threadId: thread.id, path: thread.path, isOutdated: thread.isOutdated }];
+  return [{ marker, threadId: thread.id, path: thread.path, line: thread.line ?? -1, isOutdated: thread.isOutdated }];
 }
 
 /**

@@ -50,21 +50,44 @@ export interface InlineComment {
  * `path` existe para o re-review por delta: so reconciliamos threads de arquivos que
  * o dev mexeu desde o ultimo review, preservando as demais (sem churn de resolve+repost).
  *
+ * `line` (posicao ATUAL da thread no head, re-ancorada pelo GitHub) e a chave da
+ * reconciliacao por PROXIMIDADE: casamos finding<->thread por (path + linha +-LINE_PROX)
+ * em vez do marker exato. O modelo e nao-deterministico e re-gera markers diferentes a
+ * cada run; reconciliar por marker faria todo finding re-detectado virar "novo" e as
+ * threads ACUMULARIAM. Proximidade reconhece "e o mesmo problema, na mesma regiao".
+ *
  * `isOutdated` (GitHub marca true quando a LINHA que a thread ancora mudou desde que
  * postamos) e o gate de resolucao: so fechamos uma thread se o dev MEXEU na linha do
- * finding — nunca por o modelo nao-deterministico ter deixado de re-gerar o marker num
- * re-review. Sem isso um P0 fecharia sozinho com o codigo vulneravel intacto.
+ * finding — nunca por o modelo ter deixado de re-detectar. Sem isso um P0 fecharia
+ * sozinho com o codigo vulneravel intacto.
+ *
+ * `marker` ainda existe so para o lado de leitura (listFindingThreads reconhece os
+ * comentarios NOSSOS pelo marker); a reconciliacao NAO o usa mais.
  */
 export interface ExistingThread {
   marker: string;
   threadId: string;
   path: string;
+  line: number;
   isOutdated: boolean;
 }
+
+/** Janela de proximidade (linhas) para casar um finding com uma thread ja postada. */
+const LINE_PROX = 5;
 
 /** Arquivo de um finding: o cite JA validado contra o diff vence; file cru e fallback. */
 function findingFile(f: Finding): string {
   return parseCite(f.cite)?.file ?? f.file;
+}
+
+/** Linha do finding: o fim do range citado (casa com a `line` da thread, ancorada no fim). */
+function findingLine(f: Finding): number {
+  return parseCite(f.cite)?.end ?? f.endLine;
+}
+
+/** Mesmo arquivo E linha dentro da janela LINE_PROX -> tratamos como o MESMO problema. */
+function matchesThread(f: Finding, t: ExistingThread): boolean {
+  return findingFile(f) === t.path && Math.abs(findingLine(f) - t.line) <= LINE_PROX;
 }
 
 /**
@@ -98,21 +121,27 @@ export function reconcileInline(
   return reconcileScope(findingsNoDelta, threadsNoDelta);
 }
 
-/** Regra base novo->post / sumido+outdated->resolve / persiste|vivo->nada sobre escopo ja filtrado. */
+/**
+ * Reconciliacao por PROXIMIDADE (nao por marker) sobre um escopo ja filtrado:
+ *
+ * - toPost: finding SEM thread proxima (mesmo arquivo, linha +-LINE_PROX) -> e novo.
+ *   Casar por proximidade (e nao por marker exato) impede o ACUMULO: o modelo
+ *   nao-deterministico re-detecta o mesmo problema com marker/linha levemente diferente
+ *   a cada run; sem proximidade cada re-deteccao viraria um comentario novo.
+ * - toResolveThreadIds: thread SEM finding proximo (o problema sumiu do radar) E
+ *   isOutdated (o dev mexeu na linha que a originou). As DUAS condicoes: "sumiu" sozinho
+ *   nao basta (o modelo pode so nao ter re-detectado) e "outdated" sozinho nao basta
+ *   (a linha pode ter mudado por outro motivo). Juntas: o dev tocou a linha E o problema
+ *   nao reaparece -> corrigido. Um P0 nunca fecha com o codigo vulneravel intacto.
+ * - thread COM finding proximo: persiste (nem re-posta nem resolve).
+ */
 function reconcileScope(
   findings: Finding[],
   existing: ExistingThread[],
 ): { toPost: Finding[]; toResolveThreadIds: string[] } {
-  const markersExistentes = new Set(existing.map((t) => t.marker));
-  const markersAtuais = new Set(findings.map(findingMarker));
-  const toPost = findings.filter((f) => !markersExistentes.has(findingMarker(f)));
-  // RESOLVE exige DUAS condicoes: o marker sumiu dos findings atuais E a thread esta
-  // outdated (o dev mexeu na linha). So o marker sumir nao basta — o modelo e
-  // nao-deterministico e re-gera markers diferentes a cada run, entao um finding ainda
-  // vivo no codigo "some" sem o dev ter corrigido nada. Exigir outdated garante que um
-  // P0 so feche quando a linha que o originou de fato mudou.
+  const toPost = findings.filter((f) => !existing.some((t) => matchesThread(f, t)));
   const toResolveThreadIds = existing
-    .filter((t) => !markersAtuais.has(t.marker) && t.isOutdated)
+    .filter((t) => t.isOutdated && !findings.some((f) => matchesThread(f, t)))
     .map((t) => t.threadId);
   return { toPost, toResolveThreadIds };
 }
