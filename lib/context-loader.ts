@@ -100,6 +100,17 @@ export function buildSystemPrompt(spec: AgentSpec): string {
     '## Calibracao de severidade',
     hints || '(sem hints)',
     '',
+    // Calibracao GERAL de precisao: o modelo barato (Flash-Lite) inflava severidade e
+    // reportava o que JA estava coberto (ex: "teste ausente" num PR que inclui o .spec.ts;
+    // "validacao ausente" num campo com decorators). O check de merge so bloqueia em P0/P1,
+    // entao findings incertos DEVEM cair para P2 (nao-bloqueante) ou sumir — senao um
+    // falso-positivo trava o loop do dev para sempre. Prefira PRECISAO a recall.
+    '## PRECISAO E SEVERIDADE (anti-falso-positivo, OBRIGATORIO)',
+    '- Reporte APENAS problemas REAIS e acionaveis. Antes de reportar, confirme no DIFF e no CONTEXTO DO CODEBASE que o problema existe DE FATO.',
+    '- Se o codigo alterado JA resolve/cobre o ponto, NAO reporte: ex. o PR inclui o arquivo de teste (*.spec.ts/*Test.java) que cobre o codigo; o campo ja tem os decorators de validacao; o lock/idempotencia ja esta presente.',
+    '- Severidade: P0 = bug certo / vulnerabilidade / quebra. P1 = problema real, acionavel, de impacto claro E do qual voce tem CERTEZA. P2 = melhoria, estilo, nitpick, ou qualquer coisa incerta/discutivel.',
+    '- NA DUVIDA, use P2 ou NAO reporte. So use P0/P1 quando um engenheiro senior concordaria que aquilo BLOQUEIA o merge. Um P0/P1 falso-positivo custa mais que um P2 perdido.',
+    '',
     '## INSTRUCOES OBRIGATORIAS',
     '- Avalie SOMENTE linhas adicionadas (+) do diff.',
     '- Para CADA problema, cite OBRIGATORIAMENTE [arquivo:linha_inicio-linha_fim] de uma linha adicionada.',
