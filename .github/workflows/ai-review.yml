@@ -18,6 +18,11 @@ on:
       JIRA_BASE_URL:          { required: false }
       JIRA_EMAIL:             { required: false }
       JIRA_API_TOKEN:         { required: false }
+      # Token com Contents:read no repo central (privado) para os checkouts cross-repo
+      # a partir de OUTRO repo (pe-*). No dogfooding o github.token basta (mesmo repo);
+      # de fora, o GITHUB_TOKEN do chamador nao acessa o privado. O App token (instalado
+      # em ambos) substitui isto quando o GitHub App existir.
+      AI_REVIEW_REPO_TOKEN:   { required: false }
 permissions:
   contents: read
   pull-requests: write
@@ -28,7 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
-        with: { repository: freeflowsoftware/movvia-ai-review, ref: v1, path: _review }
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          path: _review
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: cd _review && npm i -g pnpm@9 && pnpm install --prod=false
@@ -54,7 +63,10 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-        with: { repository: freeflowsoftware/movvia-ai-review, ref: v1 }
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm i -g pnpm@9 && pnpm install
@@ -72,7 +84,11 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Checkout central
         uses: actions/checkout@v4
-        with: { repository: freeflowsoftware/movvia-ai-review, ref: v1, path: _review }
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          path: _review
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: cd _review && npm i -g pnpm@9 && pnpm install
@@ -109,7 +125,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { repository: freeflowsoftware/movvia-ai-review, ref: v1 }
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm i -g pnpm@9 && pnpm install
@@ -140,7 +159,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { repository: freeflowsoftware/movvia-ai-review, ref: v1 }
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm i -g pnpm@9 && pnpm install
