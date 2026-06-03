@@ -112,8 +112,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm i -g pnpm@9 && pnpm install
-      - name: Instalar opencode
-        run: npm i -g opencode-ai || true
+      # Sem install do opencode aqui: a etapa adversarial usa chat-completion direta via
+      # fetch nativo (realChatRunner), nao o binario opencode.
       - uses: actions/download-artifact@v4
         with: { path: /tmp/findings, pattern: "findings-*", merge-multiple: true }
       - name: Capturar diff
@@ -122,9 +122,10 @@ jobs:
         run: gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
       - name: Consolidar
         env:
-          # A etapa adversarial do gatekeeper tambem invoca o opencode (runAdversarial →
-          # realOpencodeRunner). opencode.json esta no cwd (raiz do repo central, checkout
-          # acima) e resolve a credencial via {env:LLM_API_KEY}/{env:LLM_BASE_URL}.
+          # A etapa adversarial do gatekeeper faz chat-completion direta via fetch nativo
+          # (runAdversarial → realChatRunner em lib/run-agent.ts), NAO invoca mais o binario
+          # opencode. realChatRunner le a credencial direto do ambiente, por isso ainda
+          # exportamos LLM_API_KEY/LLM_BASE_URL aqui.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
         run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff > /tmp/verdict.json

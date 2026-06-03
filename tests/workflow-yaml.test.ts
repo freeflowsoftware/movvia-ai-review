@@ -27,10 +27,11 @@ describe('YAMLs do projeto parseiam sob YAML 1.2 estrito', () => {
   }
 });
 
-// FIX P0: o opencode precisa receber a credencial do LLM em runtime. Ele resolve o
-// provider OpenAI-compatible de opencode.json via {env:LLM_API_KEY}/{env:LLM_BASE_URL},
-// entao os steps que invocam o agente (review) e a etapa adversarial (gatekeeper)
-// DEVEM exportar LLM_API_KEY ao ambiente do processo. Estes asserts travam o bug.
+// FIX P0: o realChatRunner (lib/run-agent.ts) le a credencial do LLM direto do ambiente
+// (process.env.LLM_API_KEY/LLM_BASE_URL) ao fazer a chat-completion via fetch nativo —
+// NAO ha mais opencode resolvendo opencode.json. Por isso os steps que disparam o LLM
+// (agente em review e a etapa adversarial em gatekeeper) DEVEM exportar LLM_API_KEY ao
+// ambiente do processo. Estes asserts travam o bug.
 interface WorkflowStep {
   name?: string;
   run?: string;
@@ -50,12 +51,12 @@ function findStep(wf: Workflow, jobId: string, namePart: string): WorkflowStep {
   return step;
 }
 
-describe('credencial do LLM chega ao opencode em runtime', () => {
+describe('credencial do LLM chega ao realChatRunner em runtime', () => {
   const wf = YAML.parse(
     readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
   ) as Workflow;
 
-  it('o step de review exporta LLM_API_KEY ao ambiente do opencode', () => {
+  it('o step de review exporta LLM_API_KEY ao ambiente do agente', () => {
     const step = findStep(wf, 'review', 'Rodar agente');
     expect(step.env).toBeDefined();
     expect(Object.keys(step.env!)).toContain('LLM_API_KEY');
@@ -64,7 +65,7 @@ describe('credencial do LLM chega ao opencode em runtime', () => {
     expect(Object.keys(step.env!)).toContain('LLM_BASE_URL');
   });
 
-  it('o step adversarial do gatekeeper exporta LLM_API_KEY ao ambiente do opencode', () => {
+  it('o step adversarial do gatekeeper exporta LLM_API_KEY ao ambiente do realChatRunner', () => {
     const step = findStep(wf, 'gatekeeper', 'Consolidar');
     expect(step.env).toBeDefined();
     expect(Object.keys(step.env!)).toContain('LLM_API_KEY');
@@ -72,10 +73,13 @@ describe('credencial do LLM chega ao opencode em runtime', () => {
     expect(Object.keys(step.env!)).toContain('LLM_BASE_URL');
   });
 
-  it('o job gatekeeper instala o opencode (a etapa adversarial o invoca)', () => {
+  it('o job gatekeeper NAO instala o opencode (a etapa adversarial usa realChatRunner via fetch)', () => {
+    // Apos a migracao para realChatRunner (chat-completion via fetch nativo), a etapa
+    // adversarial nao invoca mais o binario opencode — o install ficaria morto. Travamos
+    // a ausencia para impedir que ele volte por copia/cola de outro job.
     const steps = wf.jobs?.gatekeeper?.steps ?? [];
     const installs = steps.some((s) => (s.run ?? '').includes('opencode-ai'));
-    expect(installs).toBe(true);
+    expect(installs).toBe(false);
   });
 });
 
