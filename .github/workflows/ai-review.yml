@@ -139,6 +139,9 @@ jobs:
       - name: Capturar diff
         env:
           GH_TOKEN: ${{ github.token }}
+          # Este job so faz checkout do repo CENTRAL no cwd; sem GH_REPO o gh assume
+          # o repo central e busca o PR la (404). Forcamos o repo ALVO (o caller).
+          GH_REPO: ${{ github.repository }}
         run: gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
       - name: Consolidar
         env:
