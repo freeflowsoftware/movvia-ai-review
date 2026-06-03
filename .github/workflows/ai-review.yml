@@ -41,14 +41,16 @@ jobs:
       # pnpm/action-setup ANTES do setup-node: o cache do setup-node precisa do pnpm
       # ja no PATH para resolver o store. cache-dependency-path aponta para o lockfile
       # do checkout central (_review), que e quem tem as deps deste job.
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: _review/pnpm-lock.yaml
-      - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
+      - run: cd _review && pnpm install --prefer-offline
       - name: Gate Jira
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,14 +79,16 @@ jobs:
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       # Checkout do central NO CWD: o lockfile com as deps fica na raiz, entao
       # cache-dependency-path e o pnpm install rodam no cwd (sem cd _review).
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile --prefer-offline
+      - run: pnpm install --prefer-offline
       - id: set
         run: echo "matrix=$(npx tsx lib/discover.ts ${{ inputs.agents_dir }})" >> "$GITHUB_OUTPUT"
   # Fase 1c: gera o context-pack determinístico (lib/context-pack.ts) UMA vez por PR e o publica
@@ -111,14 +115,16 @@ jobs:
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       # As deps deste job vem do checkout central em _review (o checkout alvo no cwd nao tem
       # o lockfile do review), por isso cacheamos _review/pnpm-lock.yaml (padrao Fase 0).
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: _review/pnpm-lock.yaml
-      - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
+      - run: cd _review && pnpm install --prefer-offline
       - name: Capturar diff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -151,14 +157,16 @@ jobs:
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       # As deps deste job vem do checkout central em _review (o checkout alvo no cwd
       # nao tem o lockfile do review), por isso cacheamos _review/pnpm-lock.yaml.
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: _review/pnpm-lock.yaml
-      - run: cd _review && pnpm install --frozen-lockfile --prefer-offline
+      - run: cd _review && pnpm install --prefer-offline
       # Sem install do opencode: o agente faz chat-completion direta via fetch nativo
       # (realChatRunner), nao o binario opencode. O install ficaria morto.
       # Fase 1c: baixa o context-pack gerado uma vez no job context-pack. loadContextPack
@@ -201,14 +209,16 @@ jobs:
           ref: v1
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       # Checkout do central NO CWD: lockfile na raiz, cache e install no cwd.
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile --prefer-offline
+      - run: pnpm install --prefer-offline
       # Sem install do opencode aqui: a etapa adversarial usa chat-completion direta via
       # fetch nativo (realChatRunner), nao o binario opencode.
       - uses: actions/download-artifact@v4
@@ -249,14 +259,16 @@ jobs:
           ref: v1
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
       # Checkout do central NO CWD: lockfile na raiz, cache e install no cwd.
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile --prefer-offline
+      - run: pnpm install --prefer-offline
       - uses: actions/download-artifact@v4
         with: { name: verdict, path: /tmp }
       - name: Postar review + check run

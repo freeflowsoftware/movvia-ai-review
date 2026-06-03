@@ -62,21 +62,13 @@ function hasArtifactStep(wf: Workflow, jobId: string, action: string, name: stri
   );
 }
 
-// Fase 0: o setup de cada job deixa de instalar o pnpm via `npm i -g pnpm@9` (50-70s)
-// e passa a usar o cache do pnpm (pnpm/action-setup + actions/setup-node com cache:pnpm),
-// derrubando ~3min do tempo total. Este helper prova que o job esta cacheado.
+// Fase 0: o que derruba ~3min do tempo NAO e o binario do pnpm (npm i -g pnpm@9 baixa o
+// CLI em ~2s), e sim o cache do STORE (deps do projeto) via actions/setup-node cache:pnpm.
+// NAO usamos pnpm/action-setup: em jobs que fazem checkout do repo ALVO no cwd, ele le o
+// package.json do alvo (packageManager) e conflita com a versao -> "Multiple versions of pnpm".
 function jobUsesPnpmCache(wf: Workflow, jobId: string): boolean {
   const steps = wf.jobs?.[jobId]?.steps ?? [];
-  const hasActionSetup = steps.some((s) => (s.uses ?? '').includes('pnpm/action-setup'));
-  const hasNodeCache = steps.some((s) => String(s.with?.cache ?? '') === 'pnpm');
-  return hasActionSetup && hasNodeCache;
-}
-
-// Apos a Fase 0 nenhum job pode mais instalar o pnpm global: o `npm i -g pnpm` derrota
-// o cache (reinstala a cada run). A ausencia desse comando trava a regressao.
-function jobInstallsPnpmGlobally(wf: Workflow, jobId: string): boolean {
-  const steps = wf.jobs?.[jobId]?.steps ?? [];
-  return steps.some((s) => /npm i -g pnpm/.test(s.run ?? ''));
+  return steps.some((s) => String(s.with?.cache ?? '') === 'pnpm');
 }
 
 function findStep(wf: Workflow, jobId: string, namePart: string): WorkflowStep {
@@ -145,12 +137,8 @@ describe('jobs do ai-review usam cache de pnpm (Fase 0)', () => {
   const jobIds = ['gates', 'discover', 'context-pack', 'review', 'gatekeeper', 'post'];
 
   for (const jobId of jobIds) {
-    it(`o job ${jobId} usa pnpm/action-setup + cache:pnpm`, () => {
+    it(`o job ${jobId} cacheia o pnpm store (setup-node cache:pnpm)`, () => {
       expect(jobUsesPnpmCache(wf, jobId)).toBe(true);
-    });
-
-    it(`o job ${jobId} NAO reinstala o pnpm global (derrotaria o cache)`, () => {
-      expect(jobInstallsPnpmGlobally(wf, jobId)).toBe(false);
     });
   }
 });
@@ -161,12 +149,8 @@ describe('self-test usa cache de pnpm (Fase 0)', () => {
     readFileSync(resolve(repoRoot, '.github/workflows/self-test.yml'), 'utf8'),
   ) as Workflow;
 
-  it('o job test usa pnpm/action-setup + cache:pnpm', () => {
+  it('o job test cacheia o pnpm store (setup-node cache:pnpm)', () => {
     expect(jobUsesPnpmCache(wf, 'test')).toBe(true);
-  });
-
-  it('o job test NAO reinstala o pnpm global', () => {
-    expect(jobInstallsPnpmGlobally(wf, 'test')).toBe(false);
   });
 });
 
