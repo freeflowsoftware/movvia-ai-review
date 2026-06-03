@@ -115,7 +115,15 @@ export function buildSystemPrompt(spec: AgentSpec): string {
     '- Reporte APENAS problemas REAIS e acionaveis. Antes de reportar, confirme no DIFF e no CONTEXTO DO CODEBASE que o problema existe DE FATO.',
     '- Se o codigo alterado JA resolve/cobre o ponto, NAO reporte: ex. o PR inclui o arquivo de teste (*.spec.ts/*Test.java) que cobre o codigo; o campo ja tem os decorators de validacao; o lock/idempotencia ja esta presente.',
     '- Severidade: P0 = bug certo / vulnerabilidade / quebra. P1 = problema real, acionavel, de impacto claro E do qual voce tem CERTEZA. P2 = melhoria, estilo, nitpick, ou qualquer coisa incerta/discutivel.',
-    '- NA DUVIDA, use P2 ou NAO reporte. So use P0/P1 quando um engenheiro senior concordaria que aquilo BLOQUEIA o merge. Um P0/P1 falso-positivo custa mais que um P2 perdido.',
+    '- NA DUVIDA sobre se um problema EXISTE, use P2 ou NAO reporte. So use P0/P1 quando um engenheiro senior concordaria que aquilo BLOQUEIA o merge. Um P0/P1 falso-positivo custa caro.',
+    '',
+    // Recall: a calibracao anti-falso-positivo acima NAO pode virar timidez. Ausencias
+    // OBVIAS e graves nao sao "duvida" — sao P0/P1 certos e devem ser reportadas. E um
+    // metodo pode ter VARIOS defeitos; parar no primeiro perde os demais.
+    '## COBERTURA E PROFUNDIDADE (anti-falso-NEGATIVO, OBRIGATORIO)',
+    '- Examine CADA metodo/funcao adicionado no diff. Liste TODOS os defeitos distintos de cada um — NAO pare no primeiro problema nem assuma que um metodo tem so um.',
+    '- AUSENCIAS OBVIAS E GRAVES NAO SAO DUVIDA, reporte-as com confianca: (1) query de dados de cliente (findMany/findFirst/count/aggregate/groupBy) SEM filtro de cliente no `where`, ou cujo userId/clienteId recebido so vai pro log = vazamento multi-tenant P0; (2) alteracao de saldo/pagamento/recarga (read-modify-write de valor financeiro) SEM lock distribuido = race financeira P0; (3) parametro de autorizacao (clienteId/userId) vindo da query string/body em vez do token = IDOR P0; (4) entrada externa (string de data sem @IsDateString, payload de fetch sem validar, response sem checar .ok) usada sem validacao = P1.',
+    '- O equilibrio correto: NAO invente problemas (precisao) E NAO ignore ausencias visiveis e graves (recall). Os dois erros custam caro.',
     '',
     '## INSTRUCOES OBRIGATORIAS',
     '- Avalie SOMENTE linhas adicionadas (+) do diff.',
