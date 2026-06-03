@@ -1,11 +1,12 @@
 # gatekeeper.adversarial_threshold E lido pelo entrypoint do gatekeeper (Task 15):
 # editar este valor muda quais findings sobrevivem a etapa adversarial.
 #
-# llm.*: o opencode (runner real dos agentes e da etapa adversarial) le o provider
-# OpenAI-compatible de opencode.json na raiz do repo, que interpola {env:LLM_API_KEY}
-# e {env:LLM_BASE_URL}. O model default (gemini/gemini-flash-lite) casa o provider id
-# "gemini" definido la. paths_criticos segue como forward-reference (sem consumidor).
-# base_url/model trocaveis por env/secret e por frontmatter do agente.
+# llm.*: o runner real dos agentes e da etapa adversarial (realChatRunner em
+# lib/run-agent.ts) faz chat-completion direta via fetch nativo, lendo {env:LLM_API_KEY}
+# e {env:LLM_BASE_URL} direto do ambiente — nao ha mais opencode/opencode.json. O model
+# default (gemini/gemini-flash-lite) e o id PURO do OpenRouter. paths_criticos segue como
+# forward-reference (sem consumidor). base_url/model trocaveis por env/secret e por
+# frontmatter do agente.
 llm:
   default_model: "gemini/gemini-flash-lite"
   base_url_env: LLM_BASE_URL

@@ -76,8 +76,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: cd _review && npm i -g pnpm@9 && pnpm install
-      - name: Instalar opencode
-        run: npm i -g opencode-ai || true
+      # Sem install do opencode: o agente faz chat-completion direta via fetch nativo
+      # (realChatRunner), nao o binario opencode. O install ficaria morto.
       - name: Capturar diff e titulo
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,9 +86,10 @@ jobs:
           gh pr view ${{ inputs.pr_number }} --json title -q .title > /tmp/pr-title.txt
       - name: Rodar agente ${{ matrix.name }}
         env:
-          # O opencode lê o provider OpenAI-compatible de _review/opencode.json (cwd do
-          # passo) e resolve a credencial via {env:LLM_API_KEY}/{env:LLM_BASE_URL}.
-          # LLM_BASE_URL é secret opcional; default = endpoint OpenAI-compat do Gemini.
+          # O agente faz chat-completion direta via fetch nativo (realChatRunner em
+          # lib/run-agent.ts), que le a credencial direto do ambiente. Por isso exportamos
+          # LLM_API_KEY/LLM_BASE_URL aqui. LLM_BASE_URL e secret opcional; o default e o
+          # endpoint OpenAI-compat do Gemini.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
           AGENT_NAME: ${{ matrix.name }}
@@ -128,6 +129,9 @@ jobs:
           # exportamos LLM_API_KEY/LLM_BASE_URL aqui.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
+          # DEDUP_MODEL: modelo melhor para a consolidacao semantica final (consolidateFindings
+          # em lib/gatekeeper.ts). Sobrescreve o default deepseek/deepseek-v4-flash do codigo.
+          DEDUP_MODEL: deepseek/deepseek-v4-flash
         run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff > /tmp/verdict.json
       - uses: actions/upload-artifact@v4
         with: { name: verdict, path: /tmp/verdict.json }

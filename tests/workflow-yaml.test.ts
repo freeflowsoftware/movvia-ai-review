@@ -73,6 +73,23 @@ describe('credencial do LLM chega ao realChatRunner em runtime', () => {
     expect(Object.keys(step.env!)).toContain('LLM_BASE_URL');
   });
 
+  it('o step Consolidar do gatekeeper expoe DEDUP_MODEL para a consolidacao final', () => {
+    // consolidateFindings (lib/gatekeeper.ts) le DEDUP_MODEL do ambiente para usar um
+    // modelo melhor (DeepSeek) na fusao semantica final. O workflow precisa exporta-lo.
+    const step = findStep(wf, 'gatekeeper', 'Consolidar');
+    expect(Object.keys(step.env ?? {})).toContain('DEDUP_MODEL');
+    expect(String(step.env!.DEDUP_MODEL)).toBe('deepseek/deepseek-v4-flash');
+  });
+
+  it('o job review NAO instala o opencode (o agente usa realChatRunner via fetch)', () => {
+    // O agente faz chat-completion direta via fetch nativo (realChatRunner); o binario
+    // opencode nao e mais usado, entao o install ficaria morto. Travamos a ausencia para
+    // impedir que ele volte por copia/cola de outro job.
+    const steps = wf.jobs?.review?.steps ?? [];
+    const installs = steps.some((s) => (s.run ?? '').includes('opencode-ai'));
+    expect(installs).toBe(false);
+  });
+
   it('o job gatekeeper NAO instala o opencode (a etapa adversarial usa realChatRunner via fetch)', () => {
     // Apos a migracao para realChatRunner (chat-completion via fetch nativo), a etapa
     // adversarial nao invoca mais o binario opencode — o install ficaria morto. Travamos
@@ -136,45 +153,5 @@ describe('caller-template tem guard de fork no gatilho issue_comment', () => {
   it('mantem o branch pull_request normal', () => {
     const condition = caller.jobs?.call?.if ?? '';
     expect(condition).toContain("github.event_name == 'pull_request'");
-  });
-});
-
-describe('opencode.json configura um provider OpenAI-compatible para o LLM', () => {
-  interface OpencodeProvider {
-    npm?: string;
-    options?: { baseURL?: string; apiKey?: string };
-    models?: Record<string, unknown>;
-  }
-  interface OpencodeConfig {
-    model?: string;
-    provider?: Record<string, OpencodeProvider>;
-  }
-  const cfg = JSON.parse(
-    readFileSync(resolve(repoRoot, 'opencode.json'), 'utf8'),
-  ) as OpencodeConfig;
-
-  it('define o model default e o provider que o resolve', () => {
-    // Default do piloto: Gemini 2.5 Flash-Lite via OpenRouter (provider OpenAI-compat).
-    expect(cfg.model).toBe('llm/google/gemini-2.5-flash-lite');
-    const providerId = cfg.model!.split('/')[0]!;
-    const provider = cfg.provider?.[providerId];
-    expect(provider).toBeDefined();
-    expect(provider!.npm).toBe('@ai-sdk/openai-compatible');
-  });
-
-  it('interpola LLM_BASE_URL e LLM_API_KEY no provider (credencial em runtime)', () => {
-    const providerId = cfg.model!.split('/')[0]!;
-    const opts = cfg.provider![providerId]!.options ?? {};
-    expect(opts.apiKey).toBe('{env:LLM_API_KEY}');
-    expect(opts.baseURL).toBe('{env:LLM_BASE_URL}');
-  });
-
-  it('declara o model referenciado por provider/model', () => {
-    // O model id do OpenRouter contem '/' (ex: google/gemini-2.5-flash-lite), entao
-    // o providerId e o 1o segmento e o modelId e o RESTO apos o 1o '/'.
-    const segments = cfg.model!.split('/');
-    const providerId = segments[0]!;
-    const modelId = segments.slice(1).join('/');
-    expect(cfg.provider![providerId]!.models).toHaveProperty(modelId);
   });
 });
