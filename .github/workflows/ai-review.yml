@@ -152,7 +152,12 @@ jobs:
       - name: Gerar context-pack
         # context-pack-cli.ts <repoDir> <diffPath> → ContextPack JSON em stdout. repoDir e o
         # workspace do checkout alvo; o CLI le defaults.yml do central (import.meta.dirname).
-        run: npx tsx _review/lib/context-pack-cli.ts "$GITHUB_WORKSPACE" /tmp/pr.diff > context-pack.json
+        # cd _review (como todo outro tsx do workflow): as deps do pnpm install ficam em
+        # _review/node_modules (layout simbolico, nao-hoisted), entao tanto o binario tsx
+        # quanto o bare import 'yaml' so resolvem rodando de dentro de _review. Rodar do cwd
+        # do repo alvo fazia o npx baixar tsx e o Node nao achar 'yaml' (ERR_MODULE_NOT_FOUND).
+        # O redirect aponta para $GITHUB_WORKSPACE porque o upload-artifact le do cwd (raiz alvo).
+        run: cd _review && npx tsx lib/context-pack-cli.ts "$GITHUB_WORKSPACE" /tmp/pr.diff > "$GITHUB_WORKSPACE/context-pack.json"
       - uses: actions/upload-artifact@v4
         with: { name: context-pack, path: context-pack.json }
   review:
