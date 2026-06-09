@@ -64,7 +64,11 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: _review/pnpm-lock.yaml
-      - run: cd _review && pnpm install --prefer-offline
+      # --ignore-workspace: quando o repo ALVO e um workspace pnpm (ex: pe-portais),
+      # o pnpm sobe diretorios a partir de _review, encontra o pnpm-workspace.yaml do
+      # alvo e instala as deps DO ALVO em vez das do _review -> ERR_MODULE_NOT_FOUND
+      # (yaml, minimatch) em gates/context-pack. O flag trata _review como standalone.
+      - run: cd _review && pnpm install --prefer-offline --ignore-workspace
       - name: Gate Jira
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,7 +145,11 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: _review/pnpm-lock.yaml
-      - run: cd _review && pnpm install --prefer-offline
+      # --ignore-workspace: quando o repo ALVO e um workspace pnpm (ex: pe-portais),
+      # o pnpm sobe diretorios a partir de _review, encontra o pnpm-workspace.yaml do
+      # alvo e instala as deps DO ALVO em vez das do _review -> ERR_MODULE_NOT_FOUND
+      # (yaml, minimatch) em gates/context-pack. O flag trata _review como standalone.
+      - run: cd _review && pnpm install --prefer-offline --ignore-workspace
       - name: Capturar diff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -183,7 +191,11 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: _review/pnpm-lock.yaml
-      - run: cd _review && pnpm install --prefer-offline
+      # --ignore-workspace: quando o repo ALVO e um workspace pnpm (ex: pe-portais),
+      # o pnpm sobe diretorios a partir de _review, encontra o pnpm-workspace.yaml do
+      # alvo e instala as deps DO ALVO em vez das do _review -> ERR_MODULE_NOT_FOUND
+      # (yaml, minimatch) em gates/context-pack. O flag trata _review como standalone.
+      - run: cd _review && pnpm install --prefer-offline --ignore-workspace
       # Sem install do opencode: o agente faz chat-completion direta via fetch nativo
       # (realChatRunner), nao o binario opencode. O install ficaria morto.
       # Fase 1c: baixa o context-pack gerado uma vez no job context-pack. loadContextPack
