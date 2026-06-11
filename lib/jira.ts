@@ -1,4 +1,4 @@
-const JIRA_KEY = /\b(PED|PEG|AR|AN)-\d+\b/;
+const JIRA_KEY = /\b(PED|PEG|AR|AN|SEO)-\d+\b/;
 
 export function extractJiraKey(text: string): string | null {
   return JIRA_KEY.exec(text)?.[0] ?? null;
@@ -72,7 +72,7 @@ if (process.argv[1]?.endsWith('jira.ts')) {
   const title = process.argv[2] ?? '';
   const key = extractJiraKey(title);
   if (!key) {
-    console.error('::error::PR sem chave Jira no titulo (esperado PED-1234, PEG-xx, AR-xx, AN-xx).');
+    console.error('::error::PR sem chave Jira no titulo (esperado PED-1234, PEG-xx, AR-xx, AN-xx, SEO-xx).');
     process.exit(1);
   }
   const { JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN } = process.env;
