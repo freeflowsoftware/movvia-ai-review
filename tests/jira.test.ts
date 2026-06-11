@@ -23,8 +23,9 @@ describe('extractJiraKey', () => {
   it('acha PED-1234 no titulo', () => {
     expect(extractJiraKey('feat: pagamento PED-1234 saldo')).toBe('PED-1234');
   });
-  it('aceita projetos PEG/AR/AN', () => {
+  it('aceita projetos PEG/AR/AN/SEO', () => {
     expect(extractJiraKey('fix AN-7 bug')).toBe('AN-7');
+    expect(extractJiraKey('SEO-10: trocar 308 por 301 em redirects')).toBe('SEO-10');
   });
   it('retorna null quando ausente', () => {
     expect(extractJiraKey('feat: sem ticket')).toBeNull();
