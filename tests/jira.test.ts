@@ -26,6 +26,9 @@ describe('extractJiraKey', () => {
   it('aceita projetos PEG/AR/AN', () => {
     expect(extractJiraKey('fix AN-7 bug')).toBe('AN-7');
   });
+  it('aceita projeto SEO', () => {
+    expect(extractJiraKey('feat: meta tags SEO-1234')).toBe('SEO-1234');
+  });
   it('retorna null quando ausente', () => {
     expect(extractJiraKey('feat: sem ticket')).toBeNull();
   });
