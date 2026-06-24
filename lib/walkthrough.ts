@@ -1,0 +1,189 @@
+import type { WalkthroughResult, WalkthroughChange } from './types.js';
+import type { ChatRunner } from './run-agent.js';
+
+export const WALKTHROUGH_MARKER = '<!-- movvia-ai-review:walkthrough -->';
+
+const EFFORT_LABELS: Record<number, { label: string; minutes: number }> = {
+  1: { label: 'Trivial', minutes: 5 },
+  2: { label: 'Simple', minutes: 10 },
+  3: { label: 'Medium', minutes: 20 },
+  4: { label: 'Complex', minutes: 45 },
+  5: { label: 'Very Complex', minutes: 90 },
+};
+
+const SYSTEM_PROMPT = `Você é um assistente de code review da Movvia.
+Sua tarefa: analisar o diff de um Pull Request e gerar um walkthrough estruturado.
+
+Retorne EXCLUSIVAMENTE um objeto JSON válido (sem markdown externo, sem explicação adicional):
+
+{
+  "walkthrough": "<1-3 frases descrevendo o que o PR faz e por quê>",
+  "changes": [
+    {
+      "layer": "<nome da camada ou responsabilidade lógica>",
+      "files": ["<arquivo1>", "<arquivo2>"],
+      "summary": "<descrição objetiva do que mudou nesta camada>"
+    }
+  ],
+  "diagrams": ["<string Mermaid sequenceDiagram, sem os \`\`\` fences>"],
+  "effort": {
+    "score": <1-5>,
+    "label": "<Trivial|Simple|Medium|Complex|Very Complex>",
+    "minutes": <estimativa realista em minutos>
+  }
+}
+
+Regras:
+- walkthrough: síntese objetiva, 1-3 frases, explique o QUÊ e o PORQUÊ.
+- changes: agrupe por RESPONSABILIDADE LÓGICA (ex: "Templates de notificação", "Serviço de pagamento"), nunca por arquivo isolado. Cada grupo deve ter 1-5 arquivos.
+- diagrams: inclua SOMENTE quando há fluxo de chamadas relevante (método A chama B, que chama C). Use sequenceDiagram. Array vazio se não houver.
+- effort.score: 1=Trivial (typo/config), 2=Simple (<50 linhas, 1 responsabilidade), 3=Medium (múltiplas responsabilidades), 4=Complex (fluxo crítico, muitas camadas), 5=Very Complex (arquitetura, risco alto).
+- effort.label: exatamente um de "Trivial", "Simple", "Medium", "Complex", "Very Complex".
+- effort.minutes: 5, 10, 20, 45 ou 90 para scores 1–5 respectivamente.`;
+
+export function walkthroughMarker(): string {
+  return WALKTHROUGH_MARKER;
+}
+
+export function buildWalkthroughPrompts(
+  diff: string,
+  contextPack?: string,
+  prTitle?: string,
+): { system: string; user: string } {
+  const parts: string[] = [];
+  if (prTitle) parts.push(`## Título do PR\n${prTitle}`);
+  if (contextPack) parts.push(`## Contexto do codebase\n${contextPack}`);
+  parts.push(`## Diff do PR\n\`\`\`diff\n${diff}\n\`\`\``);
+  return { system: SYSTEM_PROMPT, user: parts.join('\n\n') };
+}
+
+function extractJsonFromRaw(raw: string): string | null {
+  // Prefere fence ```json explícita
+  const jsonFenceMatch = /```json\n([\s\S]*?)```/.exec(raw);
+  if (jsonFenceMatch?.[1]) {
+    const sliced = sliceBraces(jsonFenceMatch[1]);
+    if (sliced) return sliced;
+  }
+  // Fallback: primeira cerca com chaves válidas
+  const fenceMatches = [...raw.matchAll(/```\w*\n([\s\S]*?)```/g)];
+  for (const m of fenceMatches) {
+    const sliced = sliceBraces(m[1] ?? '');
+    if (sliced) return sliced;
+  }
+  return sliceBraces(raw);
+}
+
+function sliceBraces(s: string): string | null {
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  return s.slice(start, end + 1);
+}
+
+function isValidWalkthroughResult(x: unknown): x is WalkthroughResult {
+  if (typeof x !== 'object' || x === null) return false;
+  const o = x as Record<string, unknown>;
+  return (
+    typeof o.walkthrough === 'string' &&
+    Array.isArray(o.changes) &&
+    Array.isArray(o.diagrams) &&
+    typeof o.effort === 'object' &&
+    o.effort !== null &&
+    typeof (o.effort as Record<string, unknown>).score === 'number'
+  );
+}
+
+function normalizeEffort(effort: Record<string, unknown>): WalkthroughEffort {
+  const score = Math.min(5, Math.max(1, Math.round(Number(effort.score) || 2)));
+  const defaults = EFFORT_LABELS[score] ?? { label: 'Simple', minutes: 10 };
+  return {
+    score,
+    label: typeof effort.label === 'string' && effort.label ? effort.label : defaults.label,
+    minutes: typeof effort.minutes === 'number' && effort.minutes > 0 ? effort.minutes : defaults.minutes,
+  };
+}
+
+function normalizeChanges(raw: unknown): WalkthroughChange[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
+    .filter((c) => typeof c.layer === 'string' && typeof c.summary === 'string')
+    .map((c) => ({
+      layer: String(c.layer),
+      files: Array.isArray(c.files) ? c.files.map(String) : [],
+      summary: String(c.summary),
+    }));
+}
+
+export function parseWalkthroughResult(raw: string): WalkthroughResult | null {
+  const json = extractJsonFromRaw(raw);
+  if (!json) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(json); } catch { return null; }
+  if (!isValidWalkthroughResult(parsed)) return null;
+  return {
+    walkthrough: parsed.walkthrough,
+    changes: normalizeChanges(parsed.changes),
+    diagrams: (parsed.diagrams as unknown[]).filter((d): d is string => typeof d === 'string'),
+    effort: normalizeEffort(parsed.effort as Record<string, unknown>),
+  };
+}
+
+function formatChangesTable(changes: WalkthroughChange[]): string {
+  if (changes.length === 0) return '';
+  const rows = changes.map((c) => {
+    const layerCell = [`**${c.layer}**`, ...c.files.map((f) => `\`${f}\``)].join('<br>');
+    return `| ${layerCell} | ${c.summary} |`;
+  });
+  return ['| Layer / File(s) | Summary |', '|---|---|', ...rows].join('\n');
+}
+
+function formatDiagrams(diagrams: string[]): string {
+  if (diagrams.length === 0) return '';
+  const blocks = diagrams.map((d) => `\`\`\`mermaid\n${d.trim()}\n\`\`\``);
+  return `## Sequence Diagram(s)\n\n${blocks.join('\n\n')}`;
+}
+
+function effortEmoji(score: number): string {
+  const emojis: Record<number, string> = { 1: '🍕', 2: '🍕', 3: '🍕🍕', 4: '🍕🍕🍕', 5: '🍕🍕🍕🍕' };
+  return emojis[score] ?? '🍕';
+}
+
+export function formatWalkthroughComment(result: WalkthroughResult): string {
+  const sections: string[] = [];
+
+  sections.push(`## Walkthrough\n\n${result.walkthrough}`);
+
+  const table = formatChangesTable(result.changes);
+  if (table) sections.push(`## Changes\n\n${table}`);
+
+  const diagrams = formatDiagrams(result.diagrams);
+  if (diagrams) sections.push(diagrams);
+
+  const { score, label, minutes } = result.effort;
+  sections.push(`## Estimated code review effort\n\n${effortEmoji(score)} ${score} (${label}) | ⏱ ~${minutes} minutes`);
+
+  return `${sections.join('\n\n')}\n\n${WALKTHROUGH_MARKER}`;
+}
+
+export async function generateWalkthrough(
+  diff: string,
+  model: string,
+  runner: ChatRunner,
+  contextPack?: string,
+  prTitle?: string,
+): Promise<WalkthroughResult> {
+  const { system, user } = buildWalkthroughPrompts(diff, contextPack, prTitle);
+  const raw = await runner(model, system, user);
+  const result = parseWalkthroughResult(raw);
+  if (!result) {
+    // Fallback conservador quando o LLM retorna JSON inválido
+    return {
+      walkthrough: 'Não foi possível gerar o walkthrough automaticamente.',
+      changes: [],
+      diagrams: [],
+      effort: { score: 2, label: 'Simple', minutes: 10 },
+    };
+  }
+  return result;
+}

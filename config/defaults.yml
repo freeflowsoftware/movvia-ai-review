@@ -42,3 +42,8 @@ context_pack:
 paths_criticos:                  # CODEOWNERS humano obrigatorio
   - "**/financeiro/**"
   - "pe-migrations/**"
+# walkthrough.*: o gerador de walkthrough (lib/walkthrough-cli.ts) posta um comentario
+# top-level com narrativa + tabela de camadas + diagramas Mermaid + esforço estimado.
+# Usa Gemini Flash-Lite (barato/rapido): nao precisa de raciocinio profundo, so sumarizacao.
+walkthrough:
+  model: "gemini/gemini-flash-lite"

@@ -42,3 +42,28 @@ export interface Verdict {
   conclusion: 'success' | 'failure';
   counts: Record<Severity, number>;
 }
+
+// --- Walkthrough ---
+
+/** Uma camada lógica de mudança agrupada por responsabilidade (não por arquivo). */
+export interface WalkthroughChange {
+  layer: string;
+  files: string[];
+  summary: string;
+}
+
+/** Estimativa de esforço de review (1 = Trivial … 5 = Very Complex). */
+export interface WalkthroughEffort {
+  score: number;
+  label: string;
+  minutes: number;
+}
+
+/** Saída do gerador de walkthrough — narrativa + tabela de camadas + diagramas + esforço. */
+export interface WalkthroughResult {
+  walkthrough: string;
+  changes: WalkthroughChange[];
+  /** Strings Mermaid puras (sem os ``` fences). Vazio quando não há fluxo relevante. */
+  diagrams: string[];
+  effort: WalkthroughEffort;
+}
