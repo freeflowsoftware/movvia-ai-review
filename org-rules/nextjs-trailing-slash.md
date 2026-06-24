@@ -1,12 +1,11 @@
 ---
 appliesTo:
   - "**/*.tsx"
-  - "**/*.ts"
 ---
 
 ---
 description: Trailing slash em projetos Next.js - como avaliar hrefs estaticos e dinamicos sem gerar falso positivo
-globs: "**/*.tsx, **/*.ts"
+globs: "**/*.tsx"
 ---
 
 # Next.js – Trailing Slash em Links
@@ -25,24 +24,38 @@ Quando o href esta literal no componente, avalie diretamente:
 // ❌ href="/sobre"  — falta trailing slash
 ```
 
-## Hrefs Dinamicos — Verifique a ORIGEM, nao o componente
+## Hrefs Dinamicos — Verifique ORIGEM e o componente
 
-Quando o href vem de uma prop ou variavel (`href={link.href}`, `href={item.url}`),
-a responsabilidade do trailing slash esta no **arquivo de dados fonte**,
-nao no componente que o consome.
+Quando o href vem de prop ou variavel (`href={link.href}`, `href={item.url}`),
+a responsabilidade primaria do trailing slash esta no arquivo de dados fonte
+(imports — ex: `footerData.ts`, `sitemapData.ts`, arrays de configuracao).
 
-**Antes de reportar P1**: verifique o arquivo de dados fonte (camada de imports —
-ex: `footerData.ts`, `sitemapData.ts`, arrays de configuracao) para confirmar se
-os valores ja incluem `/`. Se o arquivo de dados **ja tem trailing slash**, o
-componente esta correto — NAO reporte P1.
+**Antes de reportar P1, verifique as DUAS coisas:**
+
+1. **O arquivo de dados** (camada de imports): todos os hrefs do array terminam com `/`?
+2. **O componente**: ele transforma o href antes de usar?
+   - Template string sem barra: `` `${path}` `` em vez de `` `${path}/` ``
+   - `.replace()` ou concatenacao que remove a barra final
+
+Se o dado tem trailing slash **E** o componente nao transforma o href,
+o componente esta correto — NAO reporte P1.
+
+Se o dado tem trailing slash **mas** o componente aplica transformacao que pode
+remover a barra, reporte P1 citando a transformacao no componente.
+
+Se o dado **nao tem** trailing slash em algum item do array, reporte P1
+citando o arquivo de dados fonte.
 
 ```tsx
-// Componente — href dinamico, trailing slash nao visivel no JSX
+// ✅ Dado com trailing slash + componente sem transformacao = OK
+// footerData.ts:45  href: "/pagar-pedagio/concessionarias/"
 {links.map(link => <Link href={link.href}>{link.label}</Link>)}
 
-// Verificar o arquivo de dados (camada de imports):
-// footerData.ts:45  href: "/pagar-pedagio/concessionarias/"  ← tem / = OK
-// footerData.ts:50  href: "/concessionarias/free-flow-cnl/"  ← tem / = OK
+// ❌ Dado com trailing slash MAS componente remove a barra = P1
+{links.map(link => <Link href={link.href.replace(/\/$/, '')}>{link.label}</Link>)}
+
+// ❌ Algum item do array sem trailing slash = P1 no arquivo de dados
+// footerData.ts:50  href: "/concessionarias/cnl"  ← falta /
 ```
 
 ## Padrao de Testes Next.js — `.replace(/\/$/, "")` NAO e evidencia de ausencia

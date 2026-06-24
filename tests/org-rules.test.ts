@@ -46,6 +46,16 @@ describe('orgRuleApplies', () => {
     // Regra Java num PR so de TypeScript -> nao injeta (economiza contexto + foco).
     expect(orgRuleApplies(['**/*.java'], ['src/a.ts', 'src/b.tsx'])).toBe(false);
   });
+
+  it('nextjs-trailing-slash: casa tsx de componente frontend, nao casa service.ts backend', () => {
+    const appliesTo = ['**/*.tsx'];
+    // Componente React do pe-portais — deve injetar a regra
+    expect(orgRuleApplies(appliesTo, ['apps/pe-portal/components/layout/footer/FooterHelp.tsx'])).toBe(true);
+    // Arquivo de dados TypeScript — nao e um componente, regra nao se aplica
+    expect(orgRuleApplies(appliesTo, ['apps/pe-portal/data/footerData.ts'])).toBe(false);
+    // Servico NestJS backend — regra Next.js nao deve injetar em PRs backend
+    expect(orgRuleApplies(appliesTo, ['src/conta/conta.service.ts'])).toBe(false);
+  });
 });
 
 describe('selectOrgRules', () => {
