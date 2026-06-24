@@ -170,6 +170,9 @@ jobs:
   walkthrough:
     needs: context-pack
     if: inputs.event != 'review_comment'
+    # continue-on-error: falha no walkthrough NAO marca o run como vermelho nem bloqueia
+    # o pipeline de findings (review→gatekeeper→post). O walkthrough e best-effort.
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read

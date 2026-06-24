@@ -1,4 +1,4 @@
-import type { WalkthroughResult, WalkthroughChange } from './types.js';
+import type { WalkthroughResult, WalkthroughChange, WalkthroughEffort } from './types.js';
 import type { ChatRunner } from './run-agent.js';
 
 export const WALKTHROUGH_MARKER = '<!-- movvia-ai-review:walkthrough -->';
@@ -93,14 +93,12 @@ function isValidWalkthroughResult(x: unknown): x is WalkthroughResult {
   );
 }
 
+// score e a fonte da verdade: label e minutes sao sempre derivados de EFFORT_LABELS,
+// nunca aceitos do LLM — evita que label/minutes inconsistentes do modelo poluam o comentario.
 function normalizeEffort(effort: Record<string, unknown>): WalkthroughEffort {
   const score = Math.min(5, Math.max(1, Math.round(Number(effort.score) || 2)));
-  const defaults = EFFORT_LABELS[score] ?? { label: 'Simple', minutes: 10 };
-  return {
-    score,
-    label: typeof effort.label === 'string' && effort.label ? effort.label : defaults.label,
-    minutes: typeof effort.minutes === 'number' && effort.minutes > 0 ? effort.minutes : defaults.minutes,
-  };
+  const { label, minutes } = EFFORT_LABELS[score] ?? { label: 'Simple', minutes: 10 };
+  return { score, label, minutes };
 }
 
 function normalizeChanges(raw: unknown): WalkthroughChange[] {
