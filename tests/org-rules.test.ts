@@ -49,7 +49,18 @@ describe('parseOrgRule', () => {
     expect(r.body.trim()).toBe('# Titulo\ncorpo da regra');
   });
 
-  it('GUARD: nenhuma org-rule real vaza frontmatter no body (anti-regressao das 16 regras)', () => {
+  it('REGRESSAO: secao markdown (---) separada por 2+ linhas em branco NAO e consumida', () => {
+    // O strip so remove blocos CONTIGUOS (<=1 quebra de linha apos o anterior). Um corpo que
+    // comeca, depois de 2 linhas em branco, com uma secao delimitada por --- (thematic break,
+    // nao frontmatter) deve ser PRESERVADO — senao perderiamos conteudo real silenciosamente.
+    const content = '---\nappliesTo:\n  - "**/*.ts"\n---\n\n\n---\nSecao A\n---\n\nConteudo real';
+    const r = parseOrgRule(content);
+    expect(r.appliesTo).toEqual(['**/*.ts']); // appliesTo segue do 1o bloco
+    expect(r.body).toContain('Secao A'); // a secao --- nao-contigua NAO foi comida
+    expect(r.body).toContain('Conteudo real');
+  });
+
+  it('GUARD: nenhuma org-rule real vaza frontmatter no body (anti-regressao das 17 regras, 16 com double-frontmatter)', () => {
     const dir = join(repoRoot, 'org-rules');
     const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
     expect(files.length).toBeGreaterThan(0);

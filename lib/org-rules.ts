@@ -16,13 +16,20 @@ import { minimatch } from 'minimatch';
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /**
- * Casa UM bloco de frontmatter ancorado no topo (com espacos em branco iniciais opcionais).
- * Usado para varrer blocos CONSECUTIVOS: 16 das 17 org-rules trazem um 2o bloco estilo Cursor
- * (`description:`/`globs:`) logo apos o bloco de roteamento; sem remove-lo, esse YAML de
- * metadados de IDE vazaria cru no prompt do agente (via context-loader). So o 1o bloco carrega
- * `appliesTo`; os demais sao metadados que nao devem poluir o prompt.
+ * Casa UM bloco de frontmatter ancorado no topo, separado do anterior por NO MAXIMO uma
+ * quebra de linha (a linha em branco entre blocos). Usado para varrer blocos CONSECUTIVOS:
+ * 16 das 17 org-rules trazem um 2o bloco estilo Cursor (`description:`/`globs:`) logo apos o
+ * bloco de roteamento; sem remove-lo, esse YAML de metadados de IDE vazaria cru no prompt do
+ * agente (via context-loader). So o 1o bloco carrega `appliesTo`; os demais sao metadados que
+ * nao devem poluir o prompt.
+ *
+ * O `\r?\n?` (em vez de `\s*`) e deliberado: limita a remocao a blocos CONTIGUOS. Se usassemos
+ * `\s*`, um corpo de regra que comecasse (apos linhas em branco) com uma secao markdown
+ * delimitada por `---` (thematic break) seria comido silenciosamente. Como as 16 regras tem
+ * exatamente 1 linha em branco entre os blocos, `\r?\n?` limpa todas e preserva conteudo real
+ * separado por 2+ linhas em branco.
  */
-const LEADING_FRONTMATTER = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+const LEADING_FRONTMATTER = /^\r?\n?---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 
 /** Remove TODOS os blocos de frontmatter consecutivos no topo do body (idempotente). */
 function stripLeadingFrontmatter(body: string): string {
