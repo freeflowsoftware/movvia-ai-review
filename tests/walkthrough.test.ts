@@ -206,6 +206,15 @@ describe('generateWalkthrough', () => {
     expect(result.effort.score).toBeGreaterThanOrEqual(1);
   });
 
+  it('retorna fallback (sem rejeitar) quando o runner lança erro de rede/HTTP', async () => {
+    const fakeRunner = async () => { throw new Error('chat-completion falhou: HTTP 500'); };
+    const result = await generateWalkthrough('+x', 'model', fakeRunner);
+    expect(result.walkthrough).toContain('Não foi possível');
+    expect(result.changes).toHaveLength(0);
+    expect(result.diagrams).toHaveLength(0);
+    expect(result.effort.score).toBeGreaterThanOrEqual(1);
+  });
+
   it('passa o título e o context-pack no user prompt', async () => {
     let capturedUser = '';
     const fakeRunner = async (_model: string, _system: string, user: string) => {

@@ -175,6 +175,15 @@ export function formatWalkthroughComment(result: WalkthroughResult): string {
   return `${sections.join('\n\n')}\n\n${WALKTHROUGH_MARKER}`;
 }
 
+// Fallback conservador: usado tanto quando o LLM retorna JSON inválido quanto quando
+// a chamada falha (rede/HTTP/timeout). Best-effort: sempre postar ALGO no PR.
+const WALKTHROUGH_FALLBACK: WalkthroughResult = {
+  walkthrough: 'Não foi possível gerar o walkthrough automaticamente.',
+  changes: [],
+  diagrams: [],
+  effort: { score: 2, label: 'Simple', minutes: 10 },
+};
+
 export async function generateWalkthrough(
   diff: string,
   model: string,
@@ -183,16 +192,16 @@ export async function generateWalkthrough(
   prTitle?: string,
 ): Promise<WalkthroughResult> {
   const { system, user } = buildWalkthroughPrompts(diff, contextPack, prTitle);
-  const raw = await runner(model, system, user);
-  const result = parseWalkthroughResult(raw);
-  if (!result) {
-    // Fallback conservador quando o LLM retorna JSON inválido
-    return {
-      walkthrough: 'Não foi possível gerar o walkthrough automaticamente.',
-      changes: [],
-      diagrams: [],
-      effort: { score: 2, label: 'Simple', minutes: 10 },
-    };
+  let raw: string;
+  try {
+    raw = await runner(model, system, user);
+  } catch (err) {
+    // realChatRunner faz throw em 5xx/429/timeout; sem este catch o processo morria
+    // ANTES de postar qualquer comentário. Cai no fallback para o PR ter sinal.
+    console.error(`walkthrough: chamada ao LLM falhou — ${(err as Error).message}`);
+    return WALKTHROUGH_FALLBACK;
   }
+  const result = parseWalkthroughResult(raw);
+  if (!result) return WALKTHROUGH_FALLBACK;
   return result;
 }
