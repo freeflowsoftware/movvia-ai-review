@@ -84,6 +84,23 @@ describe('parseWalkthroughResult', () => {
     expect(result!.effort.score).toBeGreaterThanOrEqual(1);
   });
 
+  it('coage effort.score em STRING vinda do LLM e deriva label/minutes', () => {
+    // LLMs frequentemente retornam "score": "3" (string). Trava a regressão de
+    // remover o Number(...) em normalizeEffort, que faria "3" virar NaN -> score errado.
+    const raw = JSON.stringify({ ...VALID_RESULT, effort: { score: '3', label: '', minutes: 0 } });
+    const result = parseWalkthroughResult(raw);
+    expect(result!.effort.score).toBe(3);
+    // label/minutes são reconstruídos de EFFORT_LABELS, não vindos do LLM.
+    expect(result!.effort.label).toBe('Medium');
+    expect(result!.effort.minutes).toBe(20);
+  });
+
+  it('coage e limita effort.score string fora do intervalo', () => {
+    const raw = JSON.stringify({ ...VALID_RESULT, effort: { score: '99', label: '', minutes: 0 } });
+    const result = parseWalkthroughResult(raw);
+    expect(result!.effort.score).toBe(5);
+  });
+
   it('filtra changes inválidos sem campo layer ou summary', () => {
     const raw = JSON.stringify({
       ...VALID_RESULT,

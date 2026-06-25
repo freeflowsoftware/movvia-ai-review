@@ -110,13 +110,16 @@ function sliceBraces(s: string): string | null {
 function isValidWalkthroughResult(x: unknown): x is WalkthroughResult {
   if (typeof x !== 'object' || x === null) return false;
   const o = x as Record<string, unknown>;
+  // score aceita number OU string: LLMs frequentemente retornam "score": "3";
+  // normalizeEffort coage com Number(...), entao nao rejeitamos a string aqui.
+  const score = (o.effort as Record<string, unknown> | undefined)?.score;
   return (
     typeof o.walkthrough === 'string' &&
     Array.isArray(o.changes) &&
     Array.isArray(o.diagrams) &&
     typeof o.effort === 'object' &&
     o.effort !== null &&
-    typeof (o.effort as Record<string, unknown>).score === 'number'
+    (typeof score === 'number' || typeof score === 'string')
   );
 }
 
