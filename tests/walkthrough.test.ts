@@ -132,10 +132,10 @@ describe('formatWalkthroughComment', () => {
     expect(body).toContain(VALID_RESULT.walkthrough);
   });
 
-  it('contém a tabela de Changes com cabeçalho', () => {
+  it('contém a tabela de Mudanças com cabeçalho', () => {
     const body = formatWalkthroughComment(VALID_RESULT);
-    expect(body).toContain('## Changes');
-    expect(body).toContain('| Layer / File(s) | Summary |');
+    expect(body).toContain('## Mudanças');
+    expect(body).toContain('| Camada / Arquivo(s) | Resumo |');
     expect(body).toContain('Templates de notificação');
     expect(body).toContain('templates/email/vehicle-transfer.hbs');
   });
@@ -147,22 +147,22 @@ describe('formatWalkthroughComment', () => {
 
   it('inclui o bloco Mermaid quando há diagrams', () => {
     const body = formatWalkthroughComment(VALID_RESULT);
-    expect(body).toContain('## Sequence Diagram(s)');
+    expect(body).toContain('## Diagrama(s) de sequência');
     expect(body).toContain('```mermaid');
     expect(body).toContain('sequenceDiagram');
   });
 
-  it('omite seção Sequence Diagram quando diagrams está vazio', () => {
+  it('omite seção de Diagrama de sequência quando diagrams está vazio', () => {
     const body = formatWalkthroughComment({ ...VALID_RESULT, diagrams: [] });
-    expect(body).not.toContain('Sequence Diagram');
+    expect(body).not.toContain('Diagrama(s) de sequência');
   });
 
   it('inclui a linha de esforço com emoji e tempo', () => {
     const body = formatWalkthroughComment(VALID_RESULT);
-    expect(body).toContain('## Estimated code review effort');
+    expect(body).toContain('## Esforço estimado de review');
     expect(body).toContain('🍕');
     expect(body).toContain('Simple');
-    expect(body).toContain('~10 minutes');
+    expect(body).toContain('~10 minutos');
   });
 
   it('termina com o marker de idempotência', () => {
@@ -172,7 +172,7 @@ describe('formatWalkthroughComment', () => {
 
   it('omite tabela de changes quando lista está vazia', () => {
     const body = formatWalkthroughComment({ ...VALID_RESULT, changes: [] });
-    expect(body).not.toContain('| Layer / File(s) |');
+    expect(body).not.toContain('| Camada / Arquivo(s) |');
   });
 });
 

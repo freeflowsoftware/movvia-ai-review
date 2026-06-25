@@ -172,13 +172,13 @@ function formatChangesTable(changes: WalkthroughChange[]): string {
     const layerCell = [`**${c.layer}**`, ...c.files.map((f) => `\`${f}\``)].join('<br>');
     return `| ${layerCell} | ${c.summary} |`;
   });
-  return ['| Layer / File(s) | Summary |', '|---|---|', ...rows].join('\n');
+  return ['| Camada / Arquivo(s) | Resumo |', '|---|---|', ...rows].join('\n');
 }
 
 function formatDiagrams(diagrams: string[]): string {
   if (diagrams.length === 0) return '';
   const blocks = diagrams.map((d) => `\`\`\`mermaid\n${d.trim()}\n\`\`\``);
-  return `## Sequence Diagram(s)\n\n${blocks.join('\n\n')}`;
+  return `## Diagrama(s) de sequência\n\n${blocks.join('\n\n')}`;
 }
 
 function effortEmoji(score: number): string {
@@ -192,13 +192,13 @@ export function formatWalkthroughComment(result: WalkthroughResult): string {
   sections.push(`## Walkthrough\n\n${result.walkthrough}`);
 
   const table = formatChangesTable(result.changes);
-  if (table) sections.push(`## Changes\n\n${table}`);
+  if (table) sections.push(`## Mudanças\n\n${table}`);
 
   const diagrams = formatDiagrams(result.diagrams);
   if (diagrams) sections.push(diagrams);
 
   const { score, label, minutes } = result.effort;
-  sections.push(`## Estimated code review effort\n\n${effortEmoji(score)} ${score} (${label}) | ⏱ ~${minutes} minutes`);
+  sections.push(`## Esforço estimado de review\n\n${effortEmoji(score)} ${score} (${label}) | ⏱ ~${minutes} minutos`);
 
   return `${sections.join('\n\n')}\n\n${WALKTHROUGH_MARKER}`;
 }
