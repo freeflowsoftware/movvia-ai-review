@@ -112,10 +112,14 @@ interface ChatCompletionResponse {
 // Default folgado: agentes lentos legitimos nao devem ser abortados; o timeout existe so
 // para nao prender o job ate o teto de 6h do GitHub Actions quando o endpoint pendura.
 const DEFAULT_LLM_TIMEOUT_MS = 60_000;
+// Teto dos timers do Node (TIMEOUT_MAX = 2^31-1). AbortSignal.timeout estoura RangeError
+// acima disso; clampamos para que um LLM_TIMEOUT_MS absurdo vire timeout longo, nao crash.
+const MAX_LLM_TIMEOUT_MS = 2_147_483_647;
 
-function llmTimeoutMs(): number {
+export function llmTimeoutMs(): number {
   const raw = Number(process.env.LLM_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_LLM_TIMEOUT_MS;
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LLM_TIMEOUT_MS;
+  return Math.min(raw, MAX_LLM_TIMEOUT_MS);
 }
 
 export const realChatRunner: ChatRunner = async (model, system, user) => {

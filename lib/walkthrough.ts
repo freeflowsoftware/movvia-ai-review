@@ -7,9 +7,16 @@ export const WALKTHROUGH_MARKER = '<!-- movvia-ai-review:walkthrough -->';
 
 /** Lê walkthrough.model de defaults.yml (espelha readVerifyConfig). undefined quando ausente. */
 export function readWalkthroughModel(configPath: string): string | undefined {
-  const parsed = parseYaml(readFileSync(configPath, 'utf8')) as
-    | { walkthrough?: { model?: string } }
-    | null;
+  let parsed: { walkthrough?: { model?: string } } | null;
+  try {
+    parsed = parseYaml(readFileSync(configPath, 'utf8')) as
+      | { walkthrough?: { model?: string } }
+      | null;
+  } catch {
+    // Config ausente, ilegível ou YAML inválido: sem override — o CLI cai no DEFAULT_MODEL.
+    // Sem este catch, um defaults.yml faltante derrubava a CLI inteira com ENOENT.
+    return undefined;
+  }
   const model = parsed?.walkthrough?.model;
   return typeof model === 'string' && model.length > 0 ? model : undefined;
 }

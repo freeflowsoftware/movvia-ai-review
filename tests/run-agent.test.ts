@@ -1,6 +1,6 @@
 // tests/run-agent.test.ts
 import { describe, it, expect } from 'vitest';
-import { parseFindings, runAgent, type ChatRunner } from '../lib/run-agent.js';
+import { parseFindings, runAgent, llmTimeoutMs, type ChatRunner } from '../lib/run-agent.js';
 import type { AgentSpec } from '../lib/types.js';
 
 const SPEC: AgentSpec = {
@@ -45,6 +45,32 @@ describe('parseFindings', () => {
     const out = parseFindings(raw, 'seguranca');
     expect(out).toHaveLength(1);
     expect(out[0]!.file).toBe('a.ts');
+  });
+});
+
+describe('llmTimeoutMs', () => {
+  const orig = process.env.LLM_TIMEOUT_MS;
+  const restore = () => { if (orig === undefined) delete process.env.LLM_TIMEOUT_MS; else process.env.LLM_TIMEOUT_MS = orig; };
+
+  it('usa o default (60s) quando a env é ausente ou inválida', () => {
+    delete process.env.LLM_TIMEOUT_MS;
+    try { expect(llmTimeoutMs()).toBe(60_000); } finally { restore(); }
+    process.env.LLM_TIMEOUT_MS = 'abc';
+    try { expect(llmTimeoutMs()).toBe(60_000); } finally { restore(); }
+  });
+
+  it('respeita um valor configurado válido', () => {
+    process.env.LLM_TIMEOUT_MS = '90000';
+    try { expect(llmTimeoutMs()).toBe(90_000); } finally { restore(); }
+  });
+
+  // Regressao: valor gigante estourava RangeError em AbortSignal.timeout antes do clamp.
+  it('faz clamp no teto de timers do Node (não estoura RangeError)', () => {
+    process.env.LLM_TIMEOUT_MS = '999999999999999';
+    try {
+      expect(llmTimeoutMs()).toBe(2_147_483_647);
+      expect(() => AbortSignal.timeout(llmTimeoutMs())).not.toThrow();
+    } finally { restore(); }
   });
 });
 

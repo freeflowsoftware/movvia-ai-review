@@ -180,6 +180,11 @@ describe('readWalkthroughModel', () => {
   it('lê walkthrough.model do defaults.yml', () => {
     expect(readWalkthroughModel(DEFAULTS_YML)).toBe('gemini/gemini-flash-lite');
   });
+
+  it('retorna undefined (sem crash) quando o arquivo não existe', () => {
+    const missing = join(import.meta.dirname, '..', 'config', 'nao-existe.yml');
+    expect(readWalkthroughModel(missing)).toBeUndefined();
+  });
 });
 
 describe('buildWalkthroughPrompts', () => {
