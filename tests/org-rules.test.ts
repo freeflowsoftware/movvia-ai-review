@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseOrgRule, orgRuleApplies, selectOrgRules } from '../lib/org-rules.js';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // As org-rules sao as regras COMPARTILHADAS da Movvia (lock financeiro, sem enum nativo,
 // skeleton loading...) que hoje vivem no super-repo NAO-versionado e nao chegam ao CI.
@@ -29,6 +34,31 @@ describe('parseOrgRule', () => {
     const r = parseOrgRule('---\ntitle: x\n---\ncorpo');
     expect(r.appliesTo).toBeNull();
     expect(r.body).toBe('corpo');
+  });
+
+  it('DOIS blocos de frontmatter consecutivos -> appliesTo do 1o bloco + body sem YAML', () => {
+    // Padrao real das org-rules: 1o bloco com appliesTo (roteamento) + 2o bloco
+    // estilo Cursor (description/globs) que NAO pode vazar cru pro prompt do agente.
+    const content =
+      '---\nappliesTo:\n  - "**/*.tsx"\n---\n\n---\ndescription: regra Next.js\nglobs: "**/*.tsx"\n---\n\n# Titulo\ncorpo da regra';
+    const r = parseOrgRule(content);
+    expect(r.appliesTo).toEqual(['**/*.tsx']); // appliesTo veio do 1o bloco
+    expect(r.body.trim().startsWith('---')).toBe(false);
+    expect(r.body).not.toContain('description:');
+    expect(r.body).not.toContain('globs:');
+    expect(r.body.trim()).toBe('# Titulo\ncorpo da regra');
+  });
+
+  it('GUARD: nenhuma org-rule real vaza frontmatter no body (anti-regressao das 16 regras)', () => {
+    const dir = join(repoRoot, 'org-rules');
+    const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const body = parseOrgRule(readFileSync(join(dir, f), 'utf8')).body;
+      expect(body.trim().startsWith('---'), `${f} body comeca com ---`).toBe(false);
+      expect(body, `${f} body contem description:`).not.toContain('description:');
+      expect(body, `${f} body contem globs:`).not.toContain('globs:');
+    }
   });
 });
 
