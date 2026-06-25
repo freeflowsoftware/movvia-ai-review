@@ -56,6 +56,22 @@ export function walkthroughMarker(): string {
   return WALKTHROUGH_MARKER;
 }
 
+// Cap por chars (proxy barato de tokens) para o diff. PR gigante estouraria o context
+// window do Flash-Lite -> JSON truncado -> fallback inutil. ~120k chars ≈ ~30k tokens,
+// folgado para Flash-Lite. Configuravel por env LLM_MAX_DIFF_CHARS.
+const DEFAULT_MAX_DIFF_CHARS = 120_000;
+
+function maxDiffChars(): number {
+  const raw = Number(process.env.LLM_MAX_DIFF_CHARS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_MAX_DIFF_CHARS;
+}
+
+function truncateDiff(diff: string): string {
+  const cap = maxDiffChars();
+  if (diff.length <= cap) return diff;
+  return `${diff.slice(0, cap)}\n... [diff truncado: ${cap} de ${diff.length} chars] ...`;
+}
+
 export function buildWalkthroughPrompts(
   diff: string,
   contextPack?: string,
@@ -64,7 +80,7 @@ export function buildWalkthroughPrompts(
   const parts: string[] = [];
   if (prTitle) parts.push(`## Título do PR\n${prTitle}`);
   if (contextPack) parts.push(`## Contexto do codebase\n${contextPack}`);
-  parts.push(`## Diff do PR\n\`\`\`diff\n${diff}\n\`\`\``);
+  parts.push(`## Diff do PR\n\`\`\`diff\n${truncateDiff(diff)}\n\`\`\``);
   return { system: SYSTEM_PROMPT, user: parts.join('\n\n') };
 }
 

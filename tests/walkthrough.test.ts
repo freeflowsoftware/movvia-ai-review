@@ -201,6 +201,26 @@ describe('buildWalkthroughPrompts', () => {
     const { user } = buildWalkthroughPrompts(diff);
     expect(user).not.toContain('Contexto do codebase');
   });
+
+  it('trunca o diff acima do limite e anexa marcador visível', () => {
+    const original = process.env.LLM_MAX_DIFF_CHARS;
+    process.env.LLM_MAX_DIFF_CHARS = '100';
+    try {
+      const grande = 'x'.repeat(500);
+      const { user } = buildWalkthroughPrompts(grande);
+      expect(user).toContain('[diff truncado: 100 de 500 chars]');
+      // O conteúdo após o cap não deve estar presente integralmente.
+      expect(user).not.toContain('x'.repeat(200));
+    } finally {
+      if (original === undefined) delete process.env.LLM_MAX_DIFF_CHARS;
+      else process.env.LLM_MAX_DIFF_CHARS = original;
+    }
+  });
+
+  it('não trunca diff abaixo do limite (sem marcador)', () => {
+    const { user } = buildWalkthroughPrompts(diff);
+    expect(user).not.toContain('diff truncado');
+  });
 });
 
 describe('generateWalkthrough', () => {
