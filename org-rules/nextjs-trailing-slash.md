@@ -76,3 +76,9 @@ expect(href).toMatch(/\/$/);  // ← ESTE prova que o dado tem trailing slash
 Ao avaliar trailing slash a partir de testes, procure testes que verificam
 diretamente os **dados fonte** (`footerData`, arrays de config), nao os elementos
 renderizados — esses sofrem normalizacao do mock jsdom.
+
+**Ressalva (ver "Hrefs Dinamicos"):** essa regra do jsdom so vale quando a barra
+some por causa do **mock do `next/link`**. Se o **proprio componente** aplica
+`.replace(/\/$/, '')` ou uma template string que tira a barra, o href sem barra no
+teste reflete o **bug REAL** em producao — nesse caso reporte **P1**, citando a
+transformacao no componente, e nao trate como artefato de teste.
