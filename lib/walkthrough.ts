@@ -169,7 +169,9 @@ export function parseWalkthroughResult(raw: string): WalkthroughResult | null {
     diagrams: (parsed.diagrams as unknown[])
       .filter((d): d is string => typeof d === 'string')
       .filter(isLikelyMermaid),
-    effort: normalizeEffort(parsed.effort as Record<string, unknown>),
+    // `as unknown as`: parsed.effort é WalkthroughEffort (tipo concreto sem index
+    // signature); o cast direto p/ Record dispara TS2352. normalizeEffort coage de qualquer forma.
+    effort: normalizeEffort(parsed.effort as unknown as Record<string, unknown>),
   };
 }
 
