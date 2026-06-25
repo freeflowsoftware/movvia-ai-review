@@ -163,6 +163,60 @@ jobs:
         run: npx tsx _review/lib/context-pack-cli.ts "$GITHUB_WORKSPACE" /tmp/pr.diff > context-pack.json
       - uses: actions/upload-artifact@v4
         with: { name: context-pack, path: context-pack.json }
+  # Walkthrough: corre em PARALELO com o review (ambos precisam so do context-pack).
+  # Gera narrativa + tabela de camadas + diagramas Mermaid + estimativa de esforco e posta
+  # como comentario top-level no PR (idempontente via marker). Independente do pipeline de
+  # findings: falha aqui nao bloqueia o review nem o gatekeeper.
+  walkthrough:
+    needs: context-pack
+    if: inputs.event != 'review_comment'
+    # continue-on-error: falha no walkthrough NAO marca o run como vermelho nem bloqueia
+    # o pipeline de findings (review→gatekeeper→post). O walkthrough e best-effort.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: freeflowsoftware/movvia-ai-review
+          ref: v1
+          token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+      # Checkout do central NO CWD: lockfile na raiz, cache e install no cwd.
+      # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
+      # no cwd, o action-setup le o package.json do alvo (que pode ter packageManager:
+      # pnpm@x) e conflita com a versao fixada -> "Multiple versions of pnpm specified".
+      - run: npm i -g pnpm@9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --prefer-offline
+      - uses: actions/download-artifact@v4
+        with: { name: context-pack, path: /tmp/context-pack }
+      - name: Capturar diff e titulo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+          gh pr view ${{ inputs.pr_number }} --json title -q .title > /tmp/pr-title.txt
+      - name: Gerar e postar walkthrough
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
+          WALKTHROUGH_MODEL: "gemini/gemini-flash-lite"
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          export PR_TITLE="$(cat /tmp/pr-title.txt)"
+          npx tsx lib/walkthrough-cli.ts /tmp/pr.diff /tmp/context-pack/context-pack.json > /tmp/walkthrough.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: walkthrough, path: /tmp/walkthrough.json }
   review:
     needs: [discover, context-pack]
     runs-on: ubuntu-latest

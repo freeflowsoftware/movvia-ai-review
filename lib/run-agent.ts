@@ -109,24 +109,49 @@ interface ChatCompletionResponse {
   choices?: { message?: { content?: string } }[];
 }
 
+// Default folgado: agentes lentos legitimos nao devem ser abortados; o timeout existe so
+// para nao prender o job ate o teto de 6h do GitHub Actions quando o endpoint pendura.
+const DEFAULT_LLM_TIMEOUT_MS = 60_000;
+// Teto dos timers do Node (TIMEOUT_MAX = 2^31-1). AbortSignal.timeout estoura RangeError
+// acima disso; clampamos para que um LLM_TIMEOUT_MS absurdo vire timeout longo, nao crash.
+const MAX_LLM_TIMEOUT_MS = 2_147_483_647;
+
+export function llmTimeoutMs(): number {
+  const raw = Number(process.env.LLM_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LLM_TIMEOUT_MS;
+  return Math.min(raw, MAX_LLM_TIMEOUT_MS);
+}
+
 export const realChatRunner: ChatRunner = async (model, system, user) => {
   // fetch nativo do Node 22; nao dependemos mais do binario opencode no PATH.
-  const res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: stripOpencodeProviderPrefix(model),
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
-      temperature: 0.1,
-    }),
-  });
+  const timeoutMs = llmTimeoutMs();
+  let res: Response;
+  try {
+    res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: stripOpencodeProviderPrefix(model),
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
+        temperature: 0.1,
+      }),
+      // AbortSignal.timeout nativo do Node 22; aborta o fetch pendurado.
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    // TimeoutError/AbortError do AbortSignal.timeout viram mensagem legivel.
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`chat-completion timeout apos ${timeoutMs}ms`);
+    }
+    throw err;
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`chat-completion falhou: HTTP ${res.status} — ${body}`);
