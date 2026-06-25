@@ -95,6 +95,14 @@ describe('parseWalkthroughResult', () => {
     expect(result!.effort.score).toBe(5);
   });
 
+  it('cai no fallback (score=2) quando effort.score é string não-numérica', () => {
+    // Caso patológico: o LLM devolve um label textual no campo score ("alto").
+    // Number('alto') -> NaN -> || 2; trava a regressão de remover o fallback de normalizeEffort.
+    const raw = JSON.stringify({ ...VALID_RESULT, effort: { score: 'alto', label: '', minutes: 0 } });
+    const result = parseWalkthroughResult(raw);
+    expect(result!.effort.score).toBe(2);
+  });
+
   it('filtra changes inválidos sem campo layer ou summary', () => {
     const raw = JSON.stringify({
       ...VALID_RESULT,
@@ -122,6 +130,18 @@ describe('parseWalkthroughResult', () => {
     expect(result!.diagrams).toHaveLength(2);
     expect(result!.diagrams).toContain(valido);
     expect(result!.diagrams).toContain('flowchart TD\n  A-->B');
+  });
+
+  it('zera diagrams quando TODOS são prosa, e a seção some do comentário', () => {
+    // Fronteira da validação Mermaid: se nada sobrevive, formatWalkthroughComment
+    // deve omitir a seção em vez de renderizar um bloco mermaid vazio/quebrado no GitHub.
+    const raw = JSON.stringify({
+      ...VALID_RESULT,
+      diagrams: ['Aqui o fluxo de chamadas...', 'Outra explicação em prosa'],
+    });
+    const result = parseWalkthroughResult(raw);
+    expect(result!.diagrams).toHaveLength(0);
+    expect(formatWalkthroughComment(result!)).not.toContain('Diagrama(s) de sequência');
   });
 });
 

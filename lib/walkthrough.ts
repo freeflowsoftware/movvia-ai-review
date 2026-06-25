@@ -153,7 +153,7 @@ const MERMAID_TYPES =
   /^(sequenceDiagram|graph|flowchart|classDiagram|stateDiagram(-v2)?|erDiagram|gantt|pie|journey|gitGraph|mindmap|timeline)\b/;
 
 function isLikelyMermaid(d: string): boolean {
-  const firstToken = d.trim().split(/\s|\n/)[0] ?? '';
+  const firstToken = d.trim().split(/\s/)[0] ?? '';
   return MERMAID_TYPES.test(firstToken);
 }
 
