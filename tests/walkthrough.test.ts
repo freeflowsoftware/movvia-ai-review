@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import { join } from 'node:path';
 import {
   walkthroughMarker,
   parseWalkthroughResult,
   formatWalkthroughComment,
   buildWalkthroughPrompts,
   generateWalkthrough,
+  readWalkthroughModel,
   WALKTHROUGH_MARKER,
 } from '../lib/walkthrough.js';
 import type { WalkthroughResult } from '../lib/types.js';
+
+const DEFAULTS_YML = join(import.meta.dirname, '..', 'config', 'defaults.yml');
 
 const VALID_RESULT: WalkthroughResult = {
   walkthrough: 'Adiciona notificações de transferência pendente de aprovação.',
@@ -145,6 +149,12 @@ describe('formatWalkthroughComment', () => {
   it('omite tabela de changes quando lista está vazia', () => {
     const body = formatWalkthroughComment({ ...VALID_RESULT, changes: [] });
     expect(body).not.toContain('| Layer / File(s) |');
+  });
+});
+
+describe('readWalkthroughModel', () => {
+  it('lê walkthrough.model do defaults.yml', () => {
+    expect(readWalkthroughModel(DEFAULTS_YML)).toBe('gemini/gemini-flash-lite');
   });
 });
 

@@ -1,7 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { parse as parseYaml } from 'yaml';
 import type { WalkthroughResult, WalkthroughChange, WalkthroughEffort } from './types.js';
 import type { ChatRunner } from './run-agent.js';
 
 export const WALKTHROUGH_MARKER = '<!-- movvia-ai-review:walkthrough -->';
+
+/** Lê walkthrough.model de defaults.yml (espelha readVerifyConfig). undefined quando ausente. */
+export function readWalkthroughModel(configPath: string): string | undefined {
+  const parsed = parseYaml(readFileSync(configPath, 'utf8')) as
+    | { walkthrough?: { model?: string } }
+    | null;
+  const model = parsed?.walkthrough?.model;
+  return typeof model === 'string' && model.length > 0 ? model : undefined;
+}
 
 const EFFORT_LABELS: Record<number, { label: string; minutes: number }> = {
   1: { label: 'Trivial', minutes: 5 },

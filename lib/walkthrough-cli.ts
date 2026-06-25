@@ -8,12 +8,14 @@
  * Escreve o WalkthroughResult JSON em stdout (para upload como artefato).
  */
 import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { Octokit } from '@octokit/rest';
 import { realChatRunner } from './run-agent.js';
 import {
   generateWalkthrough,
   formatWalkthroughComment,
   walkthroughMarker,
+  readWalkthroughModel,
 } from './walkthrough.js';
 
 const DEFAULT_MODEL = 'gemini/gemini-flash-lite';
@@ -83,7 +85,9 @@ if (process.argv[1]?.endsWith('walkthrough-cli.ts')) {
   const contextPack = packPath ? readFileSafe(packPath) : undefined;
   const prTitle = process.env.PR_TITLE;
 
-  const model = process.env.WALKTHROUGH_MODEL || DEFAULT_MODEL;
+  // Precedência: env (CI seta WALKTHROUGH_MODEL fixo) > defaults.yml (execução local) > hardcoded.
+  const yamlModel = readWalkthroughModel(join(import.meta.dirname, '..', 'config', 'defaults.yml'));
+  const model = process.env.WALKTHROUGH_MODEL || yamlModel || DEFAULT_MODEL;
   const result = await generateWalkthrough(diff, model, realChatRunner, contextPack, prTitle);
 
   const ghRepo = process.env.GH_REPO ?? '';
