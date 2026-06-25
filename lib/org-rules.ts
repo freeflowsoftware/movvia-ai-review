@@ -16,14 +16,42 @@ import { minimatch } from 'minimatch';
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /**
+ * Casa UM bloco de frontmatter ancorado no topo, separado do anterior por NO MAXIMO uma
+ * quebra de linha (a linha em branco entre blocos). Usado para varrer blocos CONSECUTIVOS:
+ * 16 das 17 org-rules trazem um 2o bloco estilo Cursor (`description:`/`globs:`) logo apos o
+ * bloco de roteamento; sem remove-lo, esse YAML de metadados de IDE vazaria cru no prompt do
+ * agente (via context-loader). So o 1o bloco carrega `appliesTo`; os demais sao metadados que
+ * nao devem poluir o prompt.
+ *
+ * O `\r?\n?` (em vez de `\s*`) e deliberado: limita a remocao a blocos CONTIGUOS. Se usassemos
+ * `\s*`, um corpo de regra que comecasse (apos linhas em branco) com uma secao markdown
+ * delimitada por `---` (thematic break) seria comido silenciosamente. Como as 16 regras tem
+ * exatamente 1 linha em branco entre os blocos, `\r?\n?` limpa todas e preserva conteudo real
+ * separado por 2+ linhas em branco.
+ */
+const LEADING_FRONTMATTER = /^\r?\n?---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+
+/** Remove TODOS os blocos de frontmatter consecutivos no topo do body (idempotente). */
+function stripLeadingFrontmatter(body: string): string {
+  let out = body;
+  for (let prev = ''; out !== prev; ) {
+    prev = out;
+    out = out.replace(LEADING_FRONTMATTER, '');
+  }
+  return out;
+}
+
+/**
  * Separa o frontmatter (appliesTo) do corpo da regra. Sem frontmatter OU sem `appliesTo`
  * => appliesTo null (transversal). O body sai sem o bloco de frontmatter para nao poluir
- * o prompt do agente com YAML de roteamento.
+ * o prompt do agente com YAML de roteamento. appliesTo sai SEMPRE do 1o bloco; blocos de
+ * frontmatter consecutivos (ex: 2o bloco Cursor-style) sao removidos do body para nao
+ * injetar metadados de IDE no prompt.
  */
 export function parseOrgRule(content: string): { appliesTo: string[] | null; body: string } {
   const m = FRONTMATTER.exec(content);
   if (!m) return { appliesTo: null, body: content };
-  return { appliesTo: parseAppliesTo(m[1] ?? ''), body: content.slice(m[0].length) };
+  return { appliesTo: parseAppliesTo(m[1] ?? ''), body: stripLeadingFrontmatter(content.slice(m[0].length)) };
 }
 
 /** Le `appliesTo` do frontmatter: aceita inline `["a","b"]` ou block list `- "a"`. */

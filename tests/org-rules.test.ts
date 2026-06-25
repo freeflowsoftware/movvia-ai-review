@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseOrgRule, orgRuleApplies, selectOrgRules } from '../lib/org-rules.js';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // As org-rules sao as regras COMPARTILHADAS da Movvia (lock financeiro, sem enum nativo,
 // skeleton loading...) que hoje vivem no super-repo NAO-versionado e nao chegam ao CI.
@@ -30,6 +35,42 @@ describe('parseOrgRule', () => {
     expect(r.appliesTo).toBeNull();
     expect(r.body).toBe('corpo');
   });
+
+  it('DOIS blocos de frontmatter consecutivos -> appliesTo do 1o bloco + body sem YAML', () => {
+    // Padrao real das org-rules: 1o bloco com appliesTo (roteamento) + 2o bloco
+    // estilo Cursor (description/globs) que NAO pode vazar cru pro prompt do agente.
+    const content =
+      '---\nappliesTo:\n  - "**/*.tsx"\n---\n\n---\ndescription: regra Next.js\nglobs: "**/*.tsx"\n---\n\n# Titulo\ncorpo da regra';
+    const r = parseOrgRule(content);
+    expect(r.appliesTo).toEqual(['**/*.tsx']); // appliesTo veio do 1o bloco
+    expect(r.body.trim().startsWith('---')).toBe(false);
+    expect(r.body).not.toContain('description:');
+    expect(r.body).not.toContain('globs:');
+    expect(r.body.trim()).toBe('# Titulo\ncorpo da regra');
+  });
+
+  it('REGRESSAO: secao markdown (---) separada por 2+ linhas em branco NAO e consumida', () => {
+    // O strip so remove blocos CONTIGUOS (<=1 quebra de linha apos o anterior). Um corpo que
+    // comeca, depois de 2 linhas em branco, com uma secao delimitada por --- (thematic break,
+    // nao frontmatter) deve ser PRESERVADO — senao perderiamos conteudo real silenciosamente.
+    const content = '---\nappliesTo:\n  - "**/*.ts"\n---\n\n\n---\nSecao A\n---\n\nConteudo real';
+    const r = parseOrgRule(content);
+    expect(r.appliesTo).toEqual(['**/*.ts']); // appliesTo segue do 1o bloco
+    expect(r.body).toContain('Secao A'); // a secao --- nao-contigua NAO foi comida
+    expect(r.body).toContain('Conteudo real');
+  });
+
+  it('GUARD: nenhuma org-rule real vaza frontmatter no body (anti-regressao das 17 regras, 16 com double-frontmatter)', () => {
+    const dir = join(repoRoot, 'org-rules');
+    const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      const body = parseOrgRule(readFileSync(join(dir, f), 'utf8')).body;
+      expect(body.trim().startsWith('---'), `${f} body comeca com ---`).toBe(false);
+      expect(body, `${f} body contem description:`).not.toContain('description:');
+      expect(body, `${f} body contem globs:`).not.toContain('globs:');
+    }
+  });
 });
 
 describe('orgRuleApplies', () => {
@@ -45,6 +86,16 @@ describe('orgRuleApplies', () => {
   it('NAO aplica quando nenhum arquivo casa (regra de outra stack)', () => {
     // Regra Java num PR so de TypeScript -> nao injeta (economiza contexto + foco).
     expect(orgRuleApplies(['**/*.java'], ['src/a.ts', 'src/b.tsx'])).toBe(false);
+  });
+
+  it('nextjs-trailing-slash: casa tsx de componente frontend, nao casa service.ts backend', () => {
+    const appliesTo = ['**/*.tsx'];
+    // Componente React do pe-portais — deve injetar a regra
+    expect(orgRuleApplies(appliesTo, ['apps/pe-portal/components/layout/footer/FooterHelp.tsx'])).toBe(true);
+    // Arquivo de dados TypeScript — nao e um componente, regra nao se aplica
+    expect(orgRuleApplies(appliesTo, ['apps/pe-portal/data/footerData.ts'])).toBe(false);
+    // Servico NestJS backend — regra Next.js nao deve injetar em PRs backend
+    expect(orgRuleApplies(appliesTo, ['src/conta/conta.service.ts'])).toBe(false);
   });
 });
 
