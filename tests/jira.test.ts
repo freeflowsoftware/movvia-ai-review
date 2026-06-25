@@ -27,6 +27,9 @@ describe('extractJiraKey', () => {
     expect(extractJiraKey('fix AN-7 bug')).toBe('AN-7');
     expect(extractJiraKey('SEO-10: trocar 308 por 301 em redirects')).toBe('SEO-10');
   });
+  it('aceita projetos SEO', () => {
+    expect(extractJiraKey('feat: meta tags SEO-1234')).toBe('SEO-1234');
+  });
   it('retorna null quando ausente', () => {
     expect(extractJiraKey('feat: sem ticket')).toBeNull();
   });
