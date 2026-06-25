@@ -207,7 +207,8 @@ jobs:
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
-          WALKTHROUGH_MODEL: "gemini/gemini-flash-lite"
+          # ID OpenRouter valido. "gemini/gemini-flash-lite" dava HTTP 400 (model ID invalido).
+          WALKTHROUGH_MODEL: "google/gemini-2.5-flash-lite"
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}
