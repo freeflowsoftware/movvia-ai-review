@@ -14,7 +14,7 @@ import { realChatRunner } from './run-agent.js';
 import {
   generateWalkthrough,
   formatWalkthroughComment,
-  walkthroughMarker,
+  WALKTHROUGH_MARKER,
   readWalkthroughModel,
 } from './walkthrough.js';
 
@@ -41,7 +41,7 @@ async function findExistingWalkthroughComment(
   repo: string,
   prNumber: number,
 ): Promise<number | null> {
-  const marker = walkthroughMarker();
+  const marker = WALKTHROUGH_MARKER;
   // Itera páginas de comentários até encontrar o marker ou esgotar
   let page = 1;
   while (true) {

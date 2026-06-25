@@ -52,10 +52,6 @@ Regras:
 - effort.label: exatamente um de "Trivial", "Simple", "Medium", "Complex", "Very Complex".
 - effort.minutes: 5, 10, 20, 45 ou 90 para scores 1–5 respectivamente.`;
 
-export function walkthroughMarker(): string {
-  return WALKTHROUGH_MARKER;
-}
-
 // Cap por chars (proxy barato de tokens) para o diff. PR gigante estouraria o context
 // window do Flash-Lite -> JSON truncado -> fallback inutil. ~120k chars ≈ ~30k tokens,
 // folgado para Flash-Lite. Configuravel por env LLM_MAX_DIFF_CHARS.

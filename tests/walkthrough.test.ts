@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
 import {
-  walkthroughMarker,
   parseWalkthroughResult,
   formatWalkthroughComment,
   buildWalkthroughPrompts,
@@ -31,14 +30,9 @@ const VALID_RESULT: WalkthroughResult = {
   effort: { score: 2, label: 'Simple', minutes: 10 },
 };
 
-describe('walkthroughMarker', () => {
-  it('retorna o marker estável de idempotência', () => {
-    expect(walkthroughMarker()).toBe(WALKTHROUGH_MARKER);
-    expect(walkthroughMarker()).toContain('movvia-ai-review:walkthrough');
-  });
-
-  it('retorna o mesmo valor em chamadas consecutivas', () => {
-    expect(walkthroughMarker()).toBe(walkthroughMarker());
+describe('WALKTHROUGH_MARKER', () => {
+  it('é o marker estável de idempotência exportado como const', () => {
+    expect(WALKTHROUGH_MARKER).toContain('movvia-ai-review:walkthrough');
   });
 });
 
