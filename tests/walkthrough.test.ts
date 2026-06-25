@@ -94,10 +94,23 @@ describe('parseWalkthroughResult', () => {
   });
 
   it('filtra diagrams não-string', () => {
-    const raw = JSON.stringify({ ...VALID_RESULT, diagrams: ['ok', 123, null] });
+    const valido = 'sequenceDiagram\n  A->>B: x';
+    const raw = JSON.stringify({ ...VALID_RESULT, diagrams: [valido, 123, null] });
     const result = parseWalkthroughResult(raw);
     expect(result!.diagrams).toHaveLength(1);
-    expect(result!.diagrams[0]).toBe('ok');
+    expect(result!.diagrams[0]).toBe(valido);
+  });
+
+  it('descarta diagrams que não começam com tipo Mermaid conhecido (prosa do LLM)', () => {
+    const valido = 'sequenceDiagram\n  A->>B: x';
+    const raw = JSON.stringify({
+      ...VALID_RESULT,
+      diagrams: [valido, 'Aqui o fluxo de chamadas...', 'flowchart TD\n  A-->B'],
+    });
+    const result = parseWalkthroughResult(raw);
+    expect(result!.diagrams).toHaveLength(2);
+    expect(result!.diagrams).toContain(valido);
+    expect(result!.diagrams).toContain('flowchart TD\n  A-->B');
   });
 });
 

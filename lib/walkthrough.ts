@@ -124,6 +124,17 @@ function normalizeChanges(raw: unknown): WalkthroughChange[] {
     }));
 }
 
+// Tipos de diagrama Mermaid suportados. Validacao leve: o primeiro token nao-vazio do
+// diagrama precisa comecar com um destes — descarta prosa que o LLM as vezes coloca no
+// lugar do diagrama, evitando renderizar um bloco de erro vermelho no GitHub.
+const MERMAID_TYPES =
+  /^(sequenceDiagram|graph|flowchart|classDiagram|stateDiagram(-v2)?|erDiagram|gantt|pie|journey|gitGraph|mindmap|timeline)\b/;
+
+function isLikelyMermaid(d: string): boolean {
+  const firstToken = d.trim().split(/\s|\n/)[0] ?? '';
+  return MERMAID_TYPES.test(firstToken);
+}
+
 export function parseWalkthroughResult(raw: string): WalkthroughResult | null {
   const json = extractJsonFromRaw(raw);
   if (!json) return null;
@@ -133,7 +144,9 @@ export function parseWalkthroughResult(raw: string): WalkthroughResult | null {
   return {
     walkthrough: parsed.walkthrough,
     changes: normalizeChanges(parsed.changes),
-    diagrams: (parsed.diagrams as unknown[]).filter((d): d is string => typeof d === 'string'),
+    diagrams: (parsed.diagrams as unknown[])
+      .filter((d): d is string => typeof d === 'string')
+      .filter(isLikelyMermaid),
     effort: normalizeEffort(parsed.effort as Record<string, unknown>),
   };
 }
