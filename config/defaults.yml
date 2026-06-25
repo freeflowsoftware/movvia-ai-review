@@ -46,4 +46,6 @@ paths_criticos:                  # CODEOWNERS humano obrigatorio
 # top-level com narrativa + tabela de camadas + diagramas Mermaid + esforço estimado.
 # Usa Gemini Flash-Lite (barato/rapido): nao precisa de raciocinio profundo, so sumarizacao.
 walkthrough:
-  model: "gemini/gemini-flash-lite"
+  # ID no formato provider/modelo do OpenRouter. "gemini/gemini-flash-lite" retornava
+  # HTTP 400 "is not a valid model ID" -> walkthrough sempre caia no fallback.
+  model: "google/gemini-2.5-flash-lite"

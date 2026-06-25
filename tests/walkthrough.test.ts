@@ -198,7 +198,7 @@ describe('formatWalkthroughComment', () => {
 
 describe('readWalkthroughModel', () => {
   it('lê walkthrough.model do defaults.yml', () => {
-    expect(readWalkthroughModel(DEFAULTS_YML)).toBe('gemini/gemini-flash-lite');
+    expect(readWalkthroughModel(DEFAULTS_YML)).toBe('google/gemini-2.5-flash-lite');
   });
 
   it('retorna undefined (sem crash) quando o arquivo não existe', () => {
