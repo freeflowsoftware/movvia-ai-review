@@ -53,3 +53,32 @@ export function isCiteValid(cite: string, added: Map<string, Set<number>>): bool
   for (let l = c.start; l <= c.end; l++) if (lines.has(l)) return true;
   return false;
 }
+
+/**
+ * Indexa o diff unificado por arquivo numa unica passada: cada chave e o path e o valor
+ * sao os hunks daquele arquivo (tudo entre o `+++ b/<file>` dele e o cabecalho do proximo).
+ * Da ao arbitro adversarial a evidencia do que MUDOU — sozinho o refuter so ve o conteudo
+ * HEAD (context-pack), nunca o delta, entao nao consegue arbitrar findings que sao afirmacoes
+ * sobre o diff (ex: "texto nao trocado" quando o `+` mostra a troca). O CLI do gatekeeper
+ * indexa 1x e consulta por finding (O(1)), em vez de re-parsear o diff inteiro por finding.
+ * Mesma convencao de header (`+++ b/`, `--- `) de parseAddedLines.
+ */
+export function indexDiffByFile(diff: string): Map<string, string> {
+  const byFile = new Map<string, string>();
+  let file = '';
+  let hunks: string[] = [];
+  const flush = (): void => { if (file) byFile.set(file, hunks.join('\n').trim()); };
+  for (const raw of diff.split('\n')) {
+    if (raw.startsWith('diff --git ')) { flush(); file = ''; hunks = []; continue; } // novo arquivo
+    if (raw.startsWith('--- ')) continue;                                            // header versao antiga
+    if (raw.startsWith('+++ b/')) { flush(); file = raw.slice(6).trim(); hunks = []; continue; }
+    if (file) hunks.push(raw); // linhas @@ + conteudo (+/-/contexto) do arquivo corrente
+  }
+  flush();
+  return byFile;
+}
+
+/** Hunks de UM arquivo do diff. Atalho sobre indexDiffByFile; vazio se ausente. */
+export function diffForFile(diff: string, file: string): string {
+  return indexDiffByFile(diff).get(file) ?? '';
+}
