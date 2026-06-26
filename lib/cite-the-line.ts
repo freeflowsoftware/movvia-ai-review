@@ -53,3 +53,23 @@ export function isCiteValid(cite: string, added: Map<string, Set<number>>): bool
   for (let l = c.start; l <= c.end; l++) if (lines.has(l)) return true;
   return false;
 }
+
+/**
+ * Hunks do diff unificado que pertencem a UM arquivo: tudo entre o `+++ b/<file>` dele
+ * e o cabecalho do proximo arquivo (`diff --git`). Da ao arbitro adversarial a evidencia
+ * do que MUDOU — sozinho o refuter so ve o conteudo HEAD (context-pack), nunca o delta,
+ * entao nao consegue arbitrar findings que sao afirmacoes sobre o diff (ex: "texto nao
+ * trocado" quando o `+` mostra a troca). Vazio se o arquivo nao aparece no diff. Mesma
+ * convencao de header (`+++ b/`, `--- `) de parseAddedLines.
+ */
+export function diffForFile(diff: string, file: string): string {
+  const hunks: string[] = [];
+  let inFile = false;
+  for (const raw of diff.split('\n')) {
+    if (raw.startsWith('diff --git ')) { inFile = false; continue; } // novo arquivo
+    if (raw.startsWith('--- ')) continue;                            // header versao antiga
+    if (raw.startsWith('+++ b/')) { inFile = raw.slice(6).trim() === file; continue; }
+    if (inFile) hunks.push(raw); // linhas @@ + conteudo (+/-/contexto) do arquivo-alvo
+  }
+  return hunks.join('\n').trim();
+}

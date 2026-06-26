@@ -157,6 +157,16 @@ describe('buildRefuteUserPrompt', () => {
     const prompt = buildRefuteUserPrompt(f({}), '');
     expect(prompt).not.toContain('Contexto do codebase do arquivo:');
   });
+  // Diff-aware: o cetico recebe os hunks do arquivo para arbitrar afirmacoes sobre o delta
+  // (ex: requisitos alegando "texto nao trocado" quando a linha + mostra a troca, #696).
+  it('injeta a secao de diff quando os hunks sao fornecidos', () => {
+    const prompt = buildRefuteUserPrompt(f({}), undefined, '@@ -1 +1 @@\n-Em breve disponivel na:\n+Disponivel em:');
+    expect(prompt).toContain('Diff do arquivo (linhas + = estado NOVO, - = anterior):');
+    expect(prompt).toContain('+Disponivel em:');
+  });
+  it('omite a secao de diff quando os hunks nao sao fornecidos (retrocompat)', () => {
+    expect(buildRefuteUserPrompt(f({}))).not.toContain('Diff do arquivo');
+  });
 });
 
 describe('buildRefuter (context-aware)', () => {
@@ -209,6 +219,55 @@ describe('buildRefuter (context-aware)', () => {
     const run: ChatRunner = async () => '{"refuted":false,"score":9,"evidence":""}';
     const refute = buildRefuter(run, 'm', () => 'class X {}');
     expect(await refute(f({ file: 'a.ts' }))).toEqual({ refuted: false, score: 9 });
+  });
+});
+
+describe('buildRefuter (diff-aware)', () => {
+  /** Espiao do ChatRunner: captura o USER prompt para inspecionar o que foi injetado. */
+  class ChatRunnerEspiao {
+    ultimoUser = '';
+    asRunner(): ChatRunner {
+      return async (_model, _system, user) => {
+        this.ultimoUser = user;
+        return '{"refuted":false,"score":9}';
+      };
+    }
+  }
+
+  // #696: o cetico precisa ver o hunk do arquivo para arbitrar "texto nao trocado".
+  it('injeta no prompt o diff do arquivo do finding quando diffFor e fornecido', async () => {
+    const espiao = new ChatRunnerEspiao();
+    const diffFor = (file: string): string =>
+      file === 'FooterAbout.tsx' ? '@@ -36 +36 @@\n-Em breve disponivel na:\n+Disponivel em:' : '';
+    const refute = buildRefuter(espiao.asRunner(), 'm', undefined, diffFor);
+    await refute(f({ file: 'FooterAbout.tsx' }));
+    expect(espiao.ultimoUser).toContain('Diff do arquivo (linhas + = estado NOVO');
+    expect(espiao.ultimoUser).toContain('+Disponivel em:');
+  });
+
+  // #696: evidencia que o cetico transcreve vinda do DIFF (nao do excerpt) e legitima —
+  // antes evidenceHallucinated so olhava o excerpt e descartaria o veredicto por engano.
+  it('NAO descarta quando a evidencia transcrita existe so no DIFF (nao no excerpt)', async () => {
+    const run: ChatRunner = async () => '{"refuted":true,"score":9,"evidence":"+Disponivel em:"}';
+    const refute = buildRefuter(run, 'm', () => 'conteudo HEAD sem a linha', () => '@@ -36 +36 @@\n+Disponivel em:');
+    expect(await refute(f({ file: 'FooterAbout.tsx' }))).toEqual({ refuted: true, score: 9 });
+  });
+
+  // #695: onClick presente no arquivo (excerpt), cite mal-atribuido a outra linha. O cetico
+  // refuta citando a linha presente; a evidencia existe na base factual -> veredicto mantido.
+  it('mantem o veredicto de refutacao quando a evidencia de presenca existe no excerpt', async () => {
+    const run: ChatRunner = async () => '{"refuted":true,"score":9,"evidence":"onClick={onDismiss}"}';
+    const refute = buildRefuter(run, 'm', () => 'linha 127: onClick={onDismiss}', () => '@@ @@\n+linha 127: onClick={onDismiss}');
+    expect(await refute(f({ file: 'Modal.tsx' }))).toEqual({ refuted: true, score: 9 });
+  });
+
+  // Anti-falso-NEGATIVO: a coisa alegada como ausente NAO aparece nem no excerpt nem no diff,
+  // mas o cetico tentou refutar citando prova inexistente -> alucinacao -> descarta a refutacao
+  // (o finding real volta a valer). Garante que o rebalanceamento nao silencia ausencias reais.
+  it('descarta a refutacao quando a evidencia nao existe em excerpt NEM diff (alucinacao)', async () => {
+    const run: ChatRunner = async () => '{"refuted":false,"score":9,"evidence":"lock.acquire()"}';
+    const refute = buildRefuter(run, 'm', () => 'saldo += valor; // sem lock', () => '@@ @@\n+saldo += valor;');
+    expect(await refute(f({ file: 'saldo.ts' }))).toEqual({ refuted: true, score: 0 });
   });
 });
 
