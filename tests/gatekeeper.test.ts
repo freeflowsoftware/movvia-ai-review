@@ -159,10 +159,11 @@ describe('buildRefuteUserPrompt', () => {
   });
   // Diff-aware: o cetico recebe os hunks do arquivo para arbitrar afirmacoes sobre o delta
   // (ex: requisitos alegando "texto nao trocado" quando a linha + mostra a troca, #696).
-  it('injeta a secao de diff quando os hunks sao fornecidos', () => {
+  it('injeta a secao de diff (delimitada como DADOS) quando os hunks sao fornecidos', () => {
     const prompt = buildRefuteUserPrompt(f({}), undefined, '@@ -1 +1 @@\n-Em breve disponivel na:\n+Disponivel em:');
-    expect(prompt).toContain('Diff do arquivo (linhas + = estado NOVO, - = anterior):');
+    expect(prompt).toContain('Diff do arquivo (DADOS, linhas + = estado NOVO, - = anterior) <<<');
     expect(prompt).toContain('+Disponivel em:');
+    expect(prompt).toContain('>>>'); // fronteira do dado, anti prompt-injection
   });
   it('omite a secao de diff quando os hunks nao sao fornecidos (retrocompat)', () => {
     expect(buildRefuteUserPrompt(f({}))).not.toContain('Diff do arquivo');
@@ -241,7 +242,7 @@ describe('buildRefuter (diff-aware)', () => {
       file === 'FooterAbout.tsx' ? '@@ -36 +36 @@\n-Em breve disponivel na:\n+Disponivel em:' : '';
     const refute = buildRefuter(espiao.asRunner(), 'm', undefined, diffFor);
     await refute(f({ file: 'FooterAbout.tsx' }));
-    expect(espiao.ultimoUser).toContain('Diff do arquivo (linhas + = estado NOVO');
+    expect(espiao.ultimoUser).toContain('Diff do arquivo (DADOS, linhas + = estado NOVO');
     expect(espiao.ultimoUser).toContain('+Disponivel em:');
   });
 

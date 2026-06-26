@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAddedLines, parseCite, isCiteValid, diffForFile } from '../lib/cite-the-line.js';
+import { parseAddedLines, parseCite, isCiteValid, diffForFile, indexDiffByFile } from '../lib/cite-the-line.js';
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
 --- a/src/a.ts
@@ -106,5 +106,19 @@ describe('diffForFile', () => {
 
   it('retorna vazio quando o arquivo nao esta no diff', () => {
     expect(diffForFile(DIFF, 'src/inexistente.ts')).toBe('');
+  });
+});
+
+describe('indexDiffByFile', () => {
+  // Indexa numa unica passada para o gatekeeper consultar O(1) por finding (sem re-parse).
+  it('mapeia cada arquivo aos seus hunks numa unica passada', () => {
+    const idx = indexDiffByFile(DIFF_DOIS_ARQUIVOS);
+    expect([...idx.keys()].sort()).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(idx.get('src/a.ts')).toContain('+Disponivel em:');
+    expect(idx.get('src/b.ts')).toContain('+atual');
+    expect(idx.get('src/a.ts')).not.toContain('atual'); // sem vazamento entre arquivos
+  });
+  it('concorda com diffForFile (que delega ao indice)', () => {
+    expect(diffForFile(DIFF_DOIS_ARQUIVOS, 'src/b.ts')).toBe(indexDiffByFile(DIFF_DOIS_ARQUIVOS).get('src/b.ts'));
   });
 });
