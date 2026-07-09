@@ -328,6 +328,24 @@ describe('job context-pack alimenta o review (Fase 1c)', () => {
   });
 });
 
+// FIX issue_comment: no re-run via /ai-review o github.ref e o default branch, entao o
+// checkout do repo ALVO sem `ref` leria a main — o context-pack (camada 1: arquivo inteiro,
+// irmaos, imports) e o repoDir do agente refletiriam codigo SEM as mudancas do PR, e o
+// refuter refutaria findings contra excerpts velhos. Travamos o ref explicito no head do PR
+// (refs/pull/N/head, nao /merge — o merge ref some quando o PR conflita).
+describe('checkout do repo alvo aponta pro head do PR (re-run via /ai-review)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  for (const jobId of ['context-pack', 'review']) {
+    it(`o job ${jobId} faz checkout do alvo com ref refs/pull/N/head`, () => {
+      const step = findStep(wf, jobId, 'Checkout repo alvo');
+      expect(String(step.with?.ref ?? '')).toBe('refs/pull/${{ inputs.pr_number }}/head');
+    });
+  }
+});
+
 // Fase 2: o refuter adversarial do gatekeeper passa a ser context-aware. O job gatekeeper
 // baixa o artefato context-pack e repassa o caminho ao gatekeeper.ts (3o argv). Sem esta
 // fiacao o pack seria gerado mas nunca chegaria ao prompt do cetico (refuta no escuro).

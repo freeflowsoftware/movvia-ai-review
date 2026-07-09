@@ -124,9 +124,15 @@ jobs:
     steps:
       # Checkout do repo ALVO no cwd com fetch-depth:0: o context-pack le arquivos inteiros,
       # irmaos e imports do codebase real (nao so o diff), entao precisa da arvore completa.
+      # ref EXPLICITO no head do PR: no evento issue_comment (/ai-review) o github.ref e o
+      # default branch, e o checkout sem ref leria a main — o pack entregaria os arquivos
+      # SEM as mudancas do PR (agente e refuter avaliando contra codigo velho). Usamos
+      # refs/pull/N/head (nao /merge): o merge ref deixa de existir quando o PR conflita.
       - name: Checkout repo alvo
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          fetch-depth: 0
       - name: Checkout central
         uses: actions/checkout@v4
         with:
@@ -225,9 +231,14 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
+      # ref explicito no head do PR pelo mesmo motivo do job context-pack: no issue_comment
+      # (/ai-review) o checkout sem ref leria a main, e loadRepoRules/loadAdrs + o repoDir
+      # do agente refletiriam codigo sem as mudancas do PR.
       - name: Checkout repo alvo
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          fetch-depth: 0
       - name: Checkout central
         uses: actions/checkout@v4
         with:
