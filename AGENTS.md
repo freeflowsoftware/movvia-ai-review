@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) and other AI coding agents when working with code in this repository.
 
-`movvia-ai-review` e um PR reviewer multi-agente in-house da Movvia. E um repo CENTRAL: cada repo alvo (pe-*) importa este reusable workflow via referencia `@v1` e ganha review automatico nos PRs. O conceito nuclear: cada arquivo `agents/*.md` vira um agente, uma dimensao e um job paralelo de review. Versao `0.9.5` (`package.json:3`), `"private": true`, ESM puro (`"type": "module"`), Node `>=22` (`package.json:6-7`). Nao ha build de producao: os CLIs rodam direto via `tsx` em runtime, sem `tsc`.
+`movvia-ai-review` e um PR reviewer multi-agente in-house da Movvia. E um repo CENTRAL: cada repo alvo (pe-*) importa este reusable workflow via referencia `@v1` e ganha review automatico nos PRs. O conceito nuclear: cada arquivo `agents/*.md` vira um agente, uma dimensao e um job paralelo de review. Versao `0.9.6` (`package.json:3`), `"private": true`, ESM puro (`"type": "module"`), Node `>=22` (`package.json:6-7`). Nao ha build de producao: os CLIs rodam direto via `tsx` em runtime, sem `tsc`.
 
 ## Comandos
 

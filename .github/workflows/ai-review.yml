@@ -128,11 +128,14 @@ jobs:
       # default branch, e o checkout sem ref leria a main — o pack entregaria os arquivos
       # SEM as mudancas do PR (agente e refuter avaliando contra codigo velho). Usamos
       # refs/pull/N/head (nao /merge): o merge ref deixa de existir quando o PR conflita.
+      # persist-credentials: false — o workspace contem codigo nao-confiavel do PR; nada
+      # depois do checkout usa credencial git (gh usa GH_TOKEN do env), entao nao persiste.
       - name: Checkout repo alvo
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           fetch-depth: 0
+          persist-credentials: false
       - name: Checkout central
         uses: actions/checkout@v4
         with:
@@ -233,12 +236,14 @@ jobs:
     steps:
       # ref explicito no head do PR pelo mesmo motivo do job context-pack: no issue_comment
       # (/ai-review) o checkout sem ref leria a main, e loadRepoRules/loadAdrs + o repoDir
-      # do agente refletiriam codigo sem as mudancas do PR.
+      # do agente refletiriam codigo sem as mudancas do PR. persist-credentials: false
+      # pelo mesmo motivo do context-pack (workspace nao-confiavel, git nao e mais usado).
       - name: Checkout repo alvo
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           fetch-depth: 0
+          persist-credentials: false
       - name: Checkout central
         uses: actions/checkout@v4
         with:
