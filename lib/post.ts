@@ -1,6 +1,6 @@
 import type { Finding, Verdict } from './types.js';
 import type { ReviewEvent } from './github.js';
-import { findingId } from './gatekeeper.js';
+import { findingId, type SuppressedByPresence } from './gatekeeper.js';
 import { parseCite } from './cite-the-line.js';
 import { readVerifyConfig, verifyZombieThreads, type ZombieThread } from './verify-fix.js';
 
@@ -202,7 +202,41 @@ export function buildInlineComments(findings: Finding[]): InlineComment[] {
   });
 }
 
-export function buildSummary(findings: Finding[], verdict: Verdict, sha: string): string {
+/**
+ * Nota de transparência dos findings descartados pelo guard determinístico de presença
+ * (regra "no silent caps": nada é cortado em silêncio). Vazia quando não houve supressão,
+ * para não poluir o resumo do caso comum.
+ */
+function suppressedNote(suppressed: SuppressedByPresence[]): string[] {
+  if (suppressed.length === 0) return [];
+  const itens = suppressed
+    .map((s) => `- ~~**${s.finding.severity}** \`${s.finding.file}\` — ${s.finding.title}~~ (${s.reason})`)
+    .join('\n');
+  return [
+    '',
+    `<details><summary>🔎 ${suppressed.length} achado(s) descartado(s) por verificação determinística de presença</summary>`,
+    '',
+    itens,
+    '</details>',
+  ];
+}
+
+/**
+ * Nota das dimensões que degradaram (ex: timeout do LLM) e NÃO foram avaliadas nesta run.
+ * Transparência: o dev sabe que aquela dimensão não rodou (não é "aprovado sem ressalvas").
+ */
+function degradedNote(degraded: string[]): string[] {
+  if (degraded.length === 0) return [];
+  return ['', `⚠️ Dimensão(ões) **${degraded.join(', ')}** não avaliada(s) nesta run (falha/timeout do reviewer).`];
+}
+
+export function buildSummary(
+  findings: Finding[],
+  verdict: Verdict,
+  sha: string,
+  suppressed: SuppressedByPresence[] = [],
+  degraded: string[] = [],
+): string {
   const { P0, P1, P2 } = verdict.counts;
   const titulo = verdict.event === 'REQUEST_CHANGES' ? '🔴 Mudancas necessarias' : '🟢 Aprovado';
   const linhas = findings
@@ -216,6 +250,8 @@ export function buildSummary(findings: Finding[], verdict: Verdict, sha: string)
     `Severidades: **${P0} P0 · ${P1} P1 · ${P2} P2**`,
     '',
     linhas || '_Nenhum problema bloqueante encontrado._',
+    ...degradedNote(degraded),
+    ...suppressedNote(suppressed),
     '',
     summaryMarker(sha),
   ].join('\n');
@@ -274,7 +310,11 @@ if (process.argv[1]?.endsWith('post.ts')) {
   const { parseWithdrawals, buildWithdrawalsComment, computeValidWithdrawals, withdrawalsMarker } = await import('./withdrawals.js');
   const { decideVerdict } = await import('./gatekeeper.js');
   // Fallback '' nos argv/split para satisfazer noUncheckedIndexedAccess do tsconfig.
-  const { verdict: rawVerdict, findings: rawFindings } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
+  const { verdict: rawVerdict, findings: rawFindings, suppressed: rawSuppressed, degraded: rawDegraded } = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8'));
+  // `suppressed` (guard de presença) e `degraded` (dimensões que falharam) podem faltar em
+  // verdict.json antigos — degradação graciosa para lista vazia.
+  const suppressed: SuppressedByPresence[] = Array.isArray(rawSuppressed) ? rawSuppressed : [];
+  const degraded: string[] = Array.isArray(rawDegraded) ? rawDegraded : [];
   const [owner = '', repo = ''] = (process.env.GH_REPO ?? '/').split('/');
   const prNumber = Number(process.env.PR_NUMBER);
   // Auth via GitHub App (REVIEW_APP_ID/REVIEW_APP_PRIVATE_KEY/REVIEW_INSTALLATION_ID)
@@ -338,7 +378,7 @@ if (process.argv[1]?.endsWith('post.ts')) {
   }
   const findings = suppressByWithdrawals(rawFindings, withdrawnIds);
   const verdict = withdrawnIds.size > 0 ? decideVerdict(findings) : rawVerdict;
-  const summary = buildSummary(findings, verdict, sha);
+  const summary = buildSummary(findings, verdict, sha, suppressed, degraded);
   await emitCheckRun(octokit, { owner, repo, prNumber }, sha, verdict.conclusion, summary);
   // Idempotencia: re-run num mesmo PR atualiza o resumo existente em vez de empilhar
   // um novo a cada commit. Ancora no summaryMarker ja embutido por buildSummary.

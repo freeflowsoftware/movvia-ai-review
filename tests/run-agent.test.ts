@@ -1,6 +1,6 @@
 // tests/run-agent.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseFindings, runAgent, llmTimeoutMs, realChatRunner, type ChatRunner } from '../lib/run-agent.js';
+import { parseFindings, runAgent, runAgentSafe, retryOnTimeout, isTimeoutError, llmTimeoutMs, realChatRunner, type ChatRunner } from '../lib/run-agent.js';
 import type { AgentSpec } from '../lib/types.js';
 
 const SPEC: AgentSpec = {
@@ -114,5 +114,58 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
     const body = JSON.stringify({ choices: [{ message: { content: 'olá do modelo' } }] });
     globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
     await expect(realChatRunner('m', 's', 'u')).resolves.toBe('olá do modelo');
+  });
+});
+
+describe('isTimeoutError', () => {
+  it('reconhece TimeoutError/AbortError e mensagens de timeout', () => {
+    const to = new Error('x'); to.name = 'TimeoutError';
+    const ab = new Error('x'); ab.name = 'AbortError';
+    expect(isTimeoutError(to)).toBe(true);
+    expect(isTimeoutError(ab)).toBe(true);
+    expect(isTimeoutError(new Error('chat-completion timeout apos 60000ms'))).toBe(true);
+  });
+  it('nao trata erros comuns como timeout', () => {
+    expect(isTimeoutError(new Error('HTTP 500'))).toBe(false);
+    expect(isTimeoutError('string')).toBe(false);
+  });
+});
+
+describe('retryOnTimeout', () => {
+  it('reexecuta UMA vez extra apos timeout e entao devolve o sucesso', async () => {
+    let calls = 0;
+    const fn = async () => {
+      calls++;
+      if (calls === 1) { const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; }
+      return 'ok';
+    };
+    expect(await retryOnTimeout(fn, 2)).toBe('ok');
+    expect(calls).toBe(2);
+  });
+  it('NAO reexecuta erro que nao e timeout (propaga na hora)', async () => {
+    let calls = 0;
+    const fn = async () => { calls++; throw new Error('HTTP 422'); };
+    await expect(retryOnTimeout(fn, 2)).rejects.toThrow('HTTP 422');
+    expect(calls).toBe(1);
+  });
+  it('esgota as tentativas e propaga o ultimo timeout', async () => {
+    let calls = 0;
+    const fn = async () => { calls++; const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; };
+    await expect(retryOnTimeout(fn, 2)).rejects.toThrow('timeout');
+    expect(calls).toBe(2);
+  });
+});
+
+describe('runAgentSafe', () => {
+  it('delega ao runAgent no caminho feliz', async () => {
+    const runner: ChatRunner = async () => '{"agent":"seguranca","findings":[]}';
+    const res = await runAgentSafe(SPEC, 'sys', 'usr', 'm', runner);
+    expect(res.agent).toBe('seguranca');
+    expect(res.degraded).toBeUndefined();
+  });
+  it('degrada (findings vazio + degraded) quando o runner falha — nao derruba o job', async () => {
+    const runner: ChatRunner = async () => { throw new Error('chat-completion timeout apos 60000ms'); };
+    const res = await runAgentSafe(SPEC, 'sys', 'usr', 'm', runner);
+    expect(res).toEqual({ agent: 'seguranca', findings: [], degraded: true });
   });
 });

@@ -12,6 +12,8 @@ import {
   estimateTokens,
   enforceTokenBudget,
   composedSuffix,
+  buildPresenceIndex,
+  EMPTY_PRESENCE_INDEX,
   nodeFileSystemReader,
   type FileSystemReader,
   type ContextPackOpts,
@@ -230,6 +232,7 @@ describe('enforceTokenBudget', () => {
           exemplars: [pf('e.ts', big)],
         },
       ],
+      presenceIndex: EMPTY_PRESENCE_INDEX,
     };
     // budget so cabe o alterado + 1 camada extra
     const out = enforceTokenBudget(pack, 120);
@@ -250,6 +253,7 @@ describe('enforceTokenBudget', () => {
           exemplars: [pf('e.ts', 'dd')],
         },
       ],
+      presenceIndex: EMPTY_PRESENCE_INDEX,
     };
     const out = enforceTokenBudget(pack, 100_000);
     const f = out.files[0]!;
@@ -346,5 +350,48 @@ describe('buildContextPack — degradacao graciosa por camada (fake que lanca)',
     expect(f.changed.content).toContain('export class C'); // camada 1 ok
     expect(f.siblings).toEqual([]); // camada 2 degradou
     expect(f.imports.map((i) => i.path)).toContain('src/dep.ts'); // camada 3 ok (nao usa listDir)
+  });
+});
+
+describe('buildPresenceIndex', () => {
+  it('indexa models Prisma, simbolos declarados, sujeitos de teste e chaves de .env.example', () => {
+    const { dir, write } = makeRepo();
+    // FP SEO-42/PR640: o model existe no schema, fora da janela do context-pack do service.
+    write('prisma/schema.prisma', 'model ConsultaAlertaEmail {\n  id String @id\n}\n');
+    // FP SEO-153: componente que o bot alegou "nao implementado/nao renderizado".
+    write('app/_rota-verde/_components/rv-hero.tsx', 'export function RvHero() {\n  return null;\n}\n');
+    // FP PR763: teste co-locado em __tests__/ que o bot alegou faltar.
+    write('hooks/__tests__/useIsAndroid.test.ts', "import { useIsAndroid } from '../useIsAndroid';\n");
+    // FP PR69-FP3: flag que o bot alegou ausente no .env.example (ela esta la).
+    write('.env.example', 'DATABASE_URL=postgres://x\nENABLE_CONSULTA_ALERTA_REMINDERS=false\n');
+
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+
+    expect(index.symbols).toContain('ConsultaAlertaEmail');
+    expect(index.symbols).toContain('RvHero');
+    expect(index.testSubjects).toContain('useIsAndroid');
+    expect(index.envKeys).toContain('ENABLE_CONSULTA_ALERTA_REMINDERS');
+  });
+
+  it('degrada gracioso: fs que lanca no walk devolve indice vazio (nunca quebra o pack)', () => {
+    const listDirFails: FileSystemReader = {
+      ...nodeFileSystemReader,
+      listDir: () => {
+        throw new Error('listDir boom');
+      },
+    };
+    const index = buildPresenceIndex('/qualquer', listDirFails);
+    expect(index).toEqual({ symbols: [], testSubjects: [], envKeys: [] });
+  });
+});
+
+describe('buildContextPack presenceIndex', () => {
+  it('anexa o presenceIndex do repo inteiro (independe dos arquivos alterados)', () => {
+    const { dir, write } = makeRepo();
+    write('prisma/schema.prisma', 'model ConsultaAlertaEmail {\n  id String @id\n}\n');
+    write('src/consulta-alerta.service.ts', 'export class ConsultaAlertaService {}');
+
+    const pack = buildContextPack(dir, ['src/consulta-alerta.service.ts'], OPTS);
+    expect(pack.presenceIndex.symbols).toContain('ConsultaAlertaEmail');
   });
 });

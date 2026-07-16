@@ -88,6 +88,32 @@ describe('buildSummary', () => {
     expect(s).toContain('Mudancas necessarias');
     expect(s).toContain(summaryMarker('abc1234'));
   });
+
+  it('sem suprimidos: nao adiciona a nota de transparencia', () => {
+    const s = buildSummary(findings, verdict, 'abc1234', []);
+    expect(s).not.toContain('verificação determinística de presença');
+  });
+
+  it('lista os findings suprimidos pelo guard de presenca (transparencia, sem corte silencioso)', () => {
+    const suppressed = [
+      { finding: findings[0]!, reason: 'símbolo ConsultaAlertaEmail declarado no repositório' },
+    ];
+    const s = buildSummary(findings, verdict, 'abc1234', suppressed);
+    expect(s).toContain('verificação determinística de presença');
+    expect(s).toContain('ConsultaAlertaEmail');
+  });
+
+  it('reporta dimensoes degradadas (timeout) — nao avaliadas nesta run', () => {
+    const s = buildSummary(findings, verdict, 'abc1234', [], ['regressao', 'requisitos']);
+    expect(s).toContain('não avaliada(s) nesta run');
+    expect(s).toContain('regressao');
+    expect(s).toContain('requisitos');
+  });
+
+  it('sem dimensoes degradadas: nao adiciona a nota', () => {
+    const s = buildSummary(findings, verdict, 'abc1234', [], []);
+    expect(s).not.toContain('não avaliada(s) nesta run');
+  });
 });
 
 describe('summaryRefFromComments', () => {

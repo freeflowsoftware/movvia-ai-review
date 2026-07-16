@@ -74,6 +74,7 @@ describe('loadContextPack', () => {
         siblings: [], imports: [], exemplars: [],
       },
     ],
+    presenceIndex: { symbols: [], testSubjects: [], envKeys: [] },
   };
 
   function writePack(pack: ContextPack): string {

@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
-import { runAgent, realChatRunner } from './run-agent.js';
+import { runAgentSafe, realChatRunner } from './run-agent.js';
 import { loadOrgRules } from './org-rules.js';
 import { ADR_GLOBS } from './adr.js';
-import type { ContextPack, FileContextLayers, PackFile } from './context-pack.js';
+import { EMPTY_PRESENCE_INDEX } from './context-pack.js';
+import type { ContextPack, FileContextLayers, PackFile, PresenceIndex } from './context-pack.js';
 import {
   extractJiraKey,
   fetchJiraTicket,
@@ -97,6 +98,21 @@ export function loadContextPack(packPath: string, changedFiles: string[]): strin
 }
 
 /**
+ * Lê o presenceIndex do artefato context-pack (metadado, NUNCA renderizado em prompt —
+ * consumido só pelo guard determinístico do gatekeeper). DEGRADAÇÃO GRACIOSA: sem pack ou
+ * JSON corrompido => índice vazio (o guard nunca suprime por índice vazio → sem falso-negativo).
+ */
+export function loadPresenceIndex(packPath: string): PresenceIndex {
+  if (!packPath || !existsSync(packPath)) return EMPTY_PRESENCE_INDEX;
+  try {
+    const pack = JSON.parse(readFileSync(packPath, 'utf8')) as ContextPack;
+    return pack.presenceIndex ?? EMPTY_PRESENCE_INDEX;
+  } catch {
+    return EMPTY_PRESENCE_INDEX;
+  }
+}
+
+/**
  * Resolve a chave Jira do PR: JIRA_KEY explicito tem prioridade; senao extrai do PR_TITLE.
  * Early return quando nada casa para nao chamar a Jira a toa nos repos sem ticket no titulo.
  */
@@ -156,6 +172,8 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // configuravel por DEFAULT_MODEL. Id PURO do OpenRouter (sem prefixo 'llm/' do opencode):
   // a chat-completion direta roteia pelo id do modelo, nao pelo provider customizado.
   const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'google/gemini-2.5-flash-lite';
-  const res = await runAgent(spec, system, user, model, realChatRunner);
+  // runAgentSafe (não runAgent): um timeout do LLM degrada esta dimensão para findings vazio
+  // em vez de sair !=0 e, via needs:, bloquear gatekeeper/post — o veredicto sempre é publicado.
+  const res = await runAgentSafe(spec, system, user, model, realChatRunner);
   process.stdout.write(JSON.stringify(res));
 }

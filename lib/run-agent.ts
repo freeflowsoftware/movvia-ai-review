@@ -125,39 +125,43 @@ export function llmTimeoutMs(): number {
 export const realChatRunner: ChatRunner = async (model, system, user) => {
   // fetch nativo do Node 22; nao dependemos mais do binario opencode no PATH.
   const timeoutMs = llmTimeoutMs();
-  let res: Response;
-  try {
-    res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: stripOpencodeProviderPrefix(model),
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
-        temperature: 0.1,
-      }),
-      // AbortSignal.timeout nativo do Node 22; aborta o fetch pendurado.
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    // TimeoutError/AbortError do AbortSignal.timeout viram mensagem legivel.
-    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new Error(`chat-completion timeout apos ${timeoutMs}ms`);
+  // retryOnTimeout: uma tentativa extra se o endpoint pendurar (TimeoutError do AbortSignal).
+  // A mensagem "timeout" e reconhecida por isTimeoutError, entao o retry so vale para timeout.
+  return retryOnTimeout(async () => {
+    let res: Response;
+    try {
+      res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.LLM_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: stripOpencodeProviderPrefix(model),
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
+          temperature: 0.1,
+        }),
+        // AbortSignal.timeout nativo do Node 22; aborta o fetch pendurado.
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      // TimeoutError/AbortError do AbortSignal.timeout viram mensagem legivel (retryavel).
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`chat-completion timeout apos ${timeoutMs}ms`);
+      }
+      throw err;
     }
-    throw err;
-  }
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`chat-completion falhou: HTTP ${res.status} — ${body}`);
-  }
-  const data = (await res.json()) as ChatCompletionResponse;
-  return data.choices?.[0]?.message?.content ?? '';
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`chat-completion falhou: HTTP ${res.status} — ${body}`);
+    }
+    const data = (await res.json()) as ChatCompletionResponse;
+    return data.choices?.[0]?.message?.content ?? '';
+  });
 };
 
 export async function runAgent(
@@ -169,4 +173,52 @@ export async function runAgent(
 ): Promise<AgentResult> {
   const raw = await runner(model, system, user);
   return { agent: spec.name, findings: parseFindings(raw, spec.name) };
+}
+
+/** True se o erro é timeout/abort transitório (rede/endpoint pendurado), não um erro de contrato. */
+export function isTimeoutError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout/i.test(err.message))
+  );
+}
+
+/**
+ * Reexecuta `fn` uma tentativa extra APENAS em timeout/abort transitório (endpoint LLM
+ * pendurado). Erros de contrato (HTTP 4xx/5xx, parse) propagam na hora — não faz sentido
+ * repetir. Custo de token só no raro retry; corta o loop "timeout → sem veredicto → rerun".
+ */
+export async function retryOnTimeout<T>(fn: () => Promise<T>, attempts = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTimeoutError(err) || i === attempts - 1) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * runAgent tolerante a falha: em erro (timeout após retry, parse, rede) degrada para findings
+ * vazio + `degraded:true` em vez de LANÇAR. Antes, um único reviewer que dava timeout derrubava
+ * a matrix leg e, por needs:, os jobs gatekeeper/post — o PR ficava SEM veredicto e o dev
+ * disparava reruns que geravam findings novos/contraditórios (não-determinância relatada).
+ * Agora a leg sempre sai 0; o veredicto é sempre publicado e a dimensão degradada é reportada.
+ */
+export async function runAgentSafe(
+  spec: AgentSpec,
+  system: string,
+  user: string,
+  model: string,
+  runner: ChatRunner,
+): Promise<AgentResult> {
+  try {
+    return await runAgent(spec, system, user, model, runner);
+  } catch (err) {
+    process.stderr.write(`[runAgentSafe] agente ${spec.name} degradou: ${String(err)}\n`);
+    return { agent: spec.name, findings: [], degraded: true };
+  }
 }

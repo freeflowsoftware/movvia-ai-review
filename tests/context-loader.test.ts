@@ -116,6 +116,19 @@ describe('buildSystemPrompt', () => {
     expect(s).toContain('Use o CONTEXTO DO CODEBASE para confirmar se o que parece ausente');
     expect(s).toContain('Regra documentada vence padrao observado');
   });
+
+  // Regras de INTENCAO (anti-falso-positivo PR69): comportamento documentado como intencional
+  // (docstring/ADR) e flag de rollout OFF por padrao NAO sao bugs.
+  it('instrui a respeitar docstring/comentario como intencao (nao reportar como bug)', () => {
+    const s = buildSystemPrompt(SPEC);
+    expect(s).toContain('docstring');
+    expect(s).toContain('INTENCIONAL');
+  });
+  it('instrui que flag de rollout OFF por padrao e intencional', () => {
+    const s = buildSystemPrompt(SPEC);
+    expect(s).toContain('rollout');
+    expect(s).toContain('OFF por padrao');
+  });
 });
 
 describe('agentMatchesPaths', () => {

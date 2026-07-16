@@ -19,6 +19,9 @@ export interface Finding {
 export interface AgentResult {
   agent: string;
   findings: Finding[];
+  /** true quando o agente falhou (ex: timeout do LLM) e degradou para findings vazio em vez
+   * de derrubar o job — a dimensão fica NÃO avaliada nesta run (o post reporta com transparência). */
+  degraded?: boolean;
 }
 
 /** Definição de um agente lida de agents/<name>.md. */

@@ -44,8 +44,26 @@ export interface FileContextLayers {
   exemplars: PackFile[];
 }
 
+/**
+ * Índice de PRESENÇA do repo inteiro (deterministico, sem LLM). Serializado no artefato
+ * mas NUNCA injetado em prompt — consumido só pelo guard determinístico do gatekeeper
+ * (refuteByPresence), que descarta findings de AUSÊNCIA cujo símbolo/teste/env existe de
+ * fato. Mata a maior classe de falso-positivo (model/componente/teste/env "ausente" que
+ * está no repo, fora da janela do context-pack) a custo ZERO de token de LLM.
+ */
+export interface PresenceIndex {
+  /** Nomes declarados no repo: model/enum/type Prisma, class/interface/function/const TS/Java/Py. */
+  symbols: string[];
+  /** Sujeitos de arquivos de teste (ex: `useIsAndroid` de `useIsAndroid.test.ts`, `Foo` de `FooTest.java`). */
+  testSubjects: string[];
+  /** Chaves presentes em qualquer `.env*.example` (ex: `ENABLE_CONSULTA_ALERTA_REMINDERS`). */
+  envKeys: string[];
+}
+
 export interface ContextPack {
   files: FileContextLayers[];
+  /** Índice de presença do repo inteiro (metadado; ver PresenceIndex). */
+  presenceIndex: PresenceIndex;
 }
 
 export interface ContextPackOpts {
@@ -346,7 +364,9 @@ export function enforceTokenBudget(pack: ContextPack, maxTokens: number): Contex
   for (const layer of ['siblings', 'imports', 'exemplars'] as const) {
     used = fillLayerWithinBudget(pack, files, layer, used, maxTokens);
   }
-  return { files };
+  // Preserva presenceIndex (e qualquer campo futuro): o budget corta só camadas do pack,
+  // nunca o índice de presença (metadado fora do prompt, custo de token zero).
+  return { ...pack, files };
 }
 
 /** Tokens da camada 1 (arquivos alterados), que nunca sao cortados. */
@@ -425,7 +445,8 @@ export function buildContextPack(
 ): ContextPack {
   const aliases = safe(() => loadTsconfigAliases(fs, repoDir), new Map<string, string>());
   const files = changedFiles.map((file) => buildFileLayers(fs, repoDir, file, opts, aliases));
-  return enforceTokenBudget({ files }, opts.maxTokens);
+  const presenceIndex = buildPresenceIndex(repoDir, fs);
+  return enforceTokenBudget({ files, presenceIndex }, opts.maxTokens);
 }
 
 /** As 4 camadas de UM arquivo, cada uma isolada por try/catch (degradacao por camada). */
@@ -490,4 +511,61 @@ function countLines(content: string): number {
 /** Normaliza separadores para POSIX (`\` -> `/`) — caminhos no pack sao sempre relativos POSIX. */
 function toPosix(p: string): string {
   return p.split('\\').join('/');
+}
+
+// ---------------------------------------------------------------------------
+// PresenceIndex — índice determinístico de presença do repo (custo de token ZERO)
+// ---------------------------------------------------------------------------
+
+/** Índice de presença vazio: usado como fallback na degradação graciosa e por callers legados. */
+export const EMPTY_PRESENCE_INDEX: PresenceIndex = { symbols: [], testSubjects: [], envKeys: [] };
+
+// Declaração nomeada (TS/JS/Java/Py) + model/enum/type do Prisma: captura o IDENTIFICADOR
+// declarado. É a evidência de que um símbolo "ausente" segundo um finding existe de fato.
+const NAMED_DECL_REGEX =
+  /\b(?:class|interface|enum|type|function|def|record|struct|namespace|model)\s+([A-Za-z_$][\w$]*)/g;
+// const/let/var no topo captura componentes/consts exportadas (ex: `export const RvHero = ...`).
+const NAMED_BINDING_REGEX = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g;
+// Arquivo de teste: `*.test.*` / `*.spec.*`, dentro de `__tests__/`, ou `*Test.java`.
+const TEST_FILE_REGEX = /(\.(test|spec)\.[jt]sx?$)|(^|\/)__tests__\/|(Test\.java$)/;
+// Chave de env: LINHA `NOME_MAIUSCULO=...` num arquivo `.env*.example`.
+const ENV_KEY_REGEX = /^\s*([A-Z][A-Z0-9_]*)\s*=/gm;
+
+/** Extrai o "sujeito" de um arquivo de teste: `useIsAndroid.test.ts` -> `useIsAndroid`, `FooTest.java` -> `Foo`. */
+function testSubjectOf(rel: string): string {
+  const name = basename(rel);
+  if (name.endsWith('Test.java')) return name.slice(0, -'Test.java'.length);
+  // Remove a cadeia de extensão e o sufixo .test/.spec: pega o nome antes do primeiro ponto.
+  const stem = name.slice(0, name.indexOf('.') === -1 ? name.length : name.indexOf('.'));
+  return stem;
+}
+
+/** Coleta os identificadores capturados por um regex global (grupo 1) numa lista. */
+function collectMatches(content: string, regex: RegExp): string[] {
+  return [...content.matchAll(regex)].map((m) => m[1] ?? '').filter(Boolean);
+}
+
+/**
+ * Constrói o PresenceIndex percorrendo o repo inteiro (mesma varredura de collectExemplars).
+ * DETERMINÍSTICO, sem LLM, sem prompt: o índice é metadado do artefato, lido só pelo guard
+ * do gatekeeper. Degrada gracioso (índice vazio) em qualquer erro de I/O — "não indexado !=
+ * ausente": o guard só SUPRIME quando ACHA presença, nunca cria falso-negativo por índice vazio.
+ */
+export function buildPresenceIndex(repoDir: string, fs: FileSystemReader = nodeFileSystemReader): PresenceIndex {
+  return safe(() => {
+    const symbols = new Set<string>();
+    const testSubjects = new Set<string>();
+    const envKeys = new Set<string>();
+    for (const rel of walkRepo(fs, repoDir)) {
+      const content = safe(() => fs.readFile(join(repoDir, rel)), '');
+      if (!content) continue;
+      for (const s of collectMatches(content, NAMED_DECL_REGEX)) symbols.add(s);
+      for (const s of collectMatches(content, NAMED_BINDING_REGEX)) symbols.add(s);
+      if (TEST_FILE_REGEX.test(rel)) testSubjects.add(testSubjectOf(rel));
+      if (/\.env[\w.]*\.example$/.test(basename(rel))) {
+        for (const k of collectMatches(content, ENV_KEY_REGEX)) envKeys.add(k);
+      }
+    }
+    return { symbols: [...symbols], testSubjects: [...testSubjects], envKeys: [...envKeys] };
+  }, EMPTY_PRESENCE_INDEX);
 }
