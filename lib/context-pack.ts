@@ -524,8 +524,17 @@ export const EMPTY_PRESENCE_INDEX: PresenceIndex = { symbols: [], testSubjects: 
 // declarado. É a evidência de que um símbolo "ausente" segundo um finding existe de fato.
 const NAMED_DECL_REGEX =
   /\b(?:class|interface|enum|type|function|def|record|struct|namespace|model)\s+([A-Za-z_$][\w$]*)/g;
-// const/let/var no topo captura componentes/consts exportadas (ex: `export const RvHero = ...`).
-const NAMED_BINDING_REGEX = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g;
+// const/let/var EXPORTADO captura componentes/consts publicas (ex: `export const RvHero = ...`).
+// Exige `export`: um binding LOCAL (dentro de funcao) nunca e o que um finding quer dizer com
+// "X ausente/nao definido", e indexa-lo so inflaria o indice com milhares de variaveis locais.
+// Declaracoes class/function/model (mesmo nao exportadas) seguem cobertas por NAMED_DECL_REGEX.
+const NAMED_BINDING_REGEX = /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+// Allowlist de extensoes que declaram simbolos: so essas linguagens tem class/model/const etc.
+// Evita ler/regexar lockfiles, JSON, assets, .md — a maior fonte de custo em monorepo (F1).
+const INDEXABLE_EXT_REGEX = /\.(ts|tsx|js|jsx|mjs|cjs|java|py|prisma)$/;
+// Cap de tamanho por arquivo: acima disso pulamos o regex (arquivo gerado/minificado que
+// escapou da allowlist de dir). ~256KB cobre qualquer fonte legitima com folga larga.
+const MAX_INDEX_BYTES = 262_144;
 // Arquivo de teste: `*.test.*` / `*.spec.*`, dentro de `__tests__/`, ou `*Test.java`.
 const TEST_FILE_REGEX = /(\.(test|spec)\.[jt]sx?$)|(^|\/)__tests__\/|(Test\.java$)/;
 // Chave de env: LINHA `NOME_MAIUSCULO=...` num arquivo `.env*.example`.
@@ -557,14 +566,20 @@ export function buildPresenceIndex(repoDir: string, fs: FileSystemReader = nodeF
     const testSubjects = new Set<string>();
     const envKeys = new Set<string>();
     for (const rel of walkRepo(fs, repoDir)) {
+      const name = basename(rel);
+      const isEnvExample = /\.env[\w.]*\.example$/.test(name);
+      // So lemos o arquivo se ele declara simbolos (allowlist) OU e um .env*.example (env keys).
+      // Corta lockfiles/JSON/assets — a segunda varredura full-repo deixa de custar O(repo inteiro).
+      if (!INDEXABLE_EXT_REGEX.test(rel) && !isEnvExample) continue;
       const content = safe(() => fs.readFile(join(repoDir, rel)), '');
-      if (!content) continue;
+      if (!content || content.length > MAX_INDEX_BYTES) continue; // cap: pula arquivo gigante
+      if (TEST_FILE_REGEX.test(rel)) testSubjects.add(testSubjectOf(rel));
+      if (isEnvExample) {
+        for (const k of collectMatches(content, ENV_KEY_REGEX)) envKeys.add(k);
+        continue; // .env.example nao declara simbolo de codigo
+      }
       for (const s of collectMatches(content, NAMED_DECL_REGEX)) symbols.add(s);
       for (const s of collectMatches(content, NAMED_BINDING_REGEX)) symbols.add(s);
-      if (TEST_FILE_REGEX.test(rel)) testSubjects.add(testSubjectOf(rel));
-      if (/\.env[\w.]*\.example$/.test(basename(rel))) {
-        for (const k of collectMatches(content, ENV_KEY_REGEX)) envKeys.add(k);
-      }
     }
     return { symbols: [...symbols], testSubjects: [...testSubjects], envKeys: [...envKeys] };
   }, EMPTY_PRESENCE_INDEX);

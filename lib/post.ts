@@ -377,7 +377,9 @@ if (process.argv[1]?.endsWith('post.ts')) {
     }
   }
   const findings = suppressByWithdrawals(rawFindings, withdrawnIds);
-  const verdict = withdrawnIds.size > 0 ? decideVerdict(findings) : rawVerdict;
+  // Recompute passa `degraded`: uma dimensão não avaliada mantém o veredito fail-closed mesmo
+  // após o dev contestar findings (senão um withdrawal reabriria a porta do "verde" sobre parcial).
+  const verdict = withdrawnIds.size > 0 ? decideVerdict(findings, degraded) : rawVerdict;
   const summary = buildSummary(findings, verdict, sha, suppressed, degraded);
   await emitCheckRun(octokit, { owner, repo, prNumber }, sha, verdict.conclusion, summary);
   // Idempotencia: re-run num mesmo PR atualiza o resumo existente em vez de empilhar

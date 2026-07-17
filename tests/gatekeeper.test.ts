@@ -304,6 +304,15 @@ describe('decideVerdict', () => {
   it('APPROVE/success quando nao ha findings', () => {
     expect(decideVerdict([])).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
   });
+  // Fail-closed (ACID): uma dimensao degradada (timeout) NAO pode virar "verde limpo" — o
+  // estado que o gate le (conclusion) tem de ser bloqueante, nao so uma nota textual.
+  it('REQUEST_CHANGES/failure quando ha dimensao degradada, mesmo sem findings bloqueantes', () => {
+    const v = decideVerdict([f({ severity: 'P2' })], ['regressao']);
+    expect(v).toMatchObject({ event: 'REQUEST_CHANGES', conclusion: 'failure' });
+  });
+  it('degraded vazio nao altera o veredito (retrocompat)', () => {
+    expect(decideVerdict([f({ severity: 'P2' })], [])).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
+  });
 });
 
 describe('capProcessGateSeverity', () => {

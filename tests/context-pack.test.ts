@@ -373,6 +373,34 @@ describe('buildPresenceIndex', () => {
     expect(index.envKeys).toContain('ENABLE_CONSULTA_ALERTA_REMINDERS');
   });
 
+  it('F2: indexa const/component de topo (export) mas NAO variavel local de funcao', () => {
+    const { dir, write } = makeRepo();
+    write('app/rv-hero.tsx', 'export const RvHero = () => null;\nfunction x() {\n  const localSecreto = 1;\n  return localSecreto;\n}\n');
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    expect(index.symbols).toContain('RvHero');
+    expect(index.symbols).not.toContain('localSecreto'); // binding local nao infla o indice
+  });
+
+  it('F1: ignora arquivos fora da allowlist de extensao (lockfile/asset nao sao lidos p/ simbolo)', () => {
+    const { dir, write } = makeRepo();
+    write('src/comp.tsx', 'export class RealComp {}');
+    write('pnpm-lock.yaml', 'packages:\n  class FakeFromLock:\n');
+    write('public/data.json', '{"class": "FakeFromJson"}');
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    expect(index.symbols).toContain('RealComp');
+    expect(index.symbols).not.toContain('FakeFromLock');
+    expect(index.symbols).not.toContain('FakeFromJson');
+  });
+
+  it('F1: pula arquivo fonte gigante (acima do cap) sem quebrar o indice', () => {
+    const { dir, write } = makeRepo();
+    write('src/ok.ts', 'export class Pequena {}');
+    write('src/gigante.ts', `export class Gigante {}\n${'// x'.repeat(200_000)}`);
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    expect(index.symbols).toContain('Pequena');
+    expect(index.symbols).not.toContain('Gigante'); // gigante pulado pelo cap de tamanho
+  });
+
   it('degrada gracioso: fs que lanca no walk devolve indice vazio (nunca quebra o pack)', () => {
     const listDirFails: FileSystemReader = {
       ...nodeFileSystemReader,
