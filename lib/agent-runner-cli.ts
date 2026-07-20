@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
-import { runAgent, realChatRunner } from './run-agent.js';
+import { runAgent, realChatRunner, withRetry } from './run-agent.js';
 import { loadOrgRules } from './org-rules.js';
 import { ADR_GLOBS } from './adr.js';
 import type { ContextPack, FileContextLayers, PackFile } from './context-pack.js';
@@ -156,6 +156,13 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // configuravel por DEFAULT_MODEL. Id PURO do OpenRouter (sem prefixo 'llm/' do opencode):
   // a chat-completion direta roteia pelo id do modelo, nao pelo provider customizado.
   const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'google/gemini-2.5-flash-lite';
-  const res = await runAgent(spec, system, user, model, realChatRunner);
+  // PED-2729: agent-runner-cli.ts redireciona stdout para o JSON de findings do workflow
+  // (ver step "Rodar agente" no ai-review.yml), entao o log de retry vai OBRIGATORIAMENTE
+  // para stderr (console.error) — nunca stdout, ou corrompe o JSON consumido pelo gatekeeper.
+  const runner = withRetry(realChatRunner, {
+    onRetry: ({ attempt, delayMs, err }) =>
+      console.error(`[${name}] tentativa ${attempt} do LLM falhou (${(err as Error).message}); re-tentando em ${delayMs}ms`),
+  });
+  const res = await runAgent(spec, system, user, model, runner);
   process.stdout.write(JSON.stringify(res));
 }
