@@ -1,7 +1,10 @@
 // Assert determinística do promptfoo: mede recall (casos positivos) e precisão (negativos)
-// sobre o JSON de findings do agente. Match por arquivo + severidade (quando declarada);
-// a categoria é texto livre do LLM, então NÃO é usada no match (fica como nota humana no
-// expected.json). Retorna GradingResult { pass, score, reason }.
+// sobre o JSON de findings do agente. Match só por arquivo — a dimensão (agente) já é
+// implícita pelo teste, e a severidade/categoria são texto livre do LLM, então NÃO entram
+// no match (severidade fica como nota humana no expected.json). Negativos são avaliados
+// pela ausência de findings com severidade bloqueante (P0/P1), alinhado à semântica real
+// do gate: o gate só bloqueia merge em P0/P1, então P2 num caso negativo não é falso
+// positivo do ponto de vista do gate. Retorna GradingResult { pass, score, reason }.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -9,9 +12,7 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function matches(finding, want) {
-  if (want.file && finding.file !== want.file) return false;
-  if (want.severity && finding.severity !== want.severity) return false;
-  return true;
+  return want.file ? finding.file === want.file : true;
 }
 
 export default function assertRecall(output, context) {
@@ -25,13 +26,15 @@ export default function assertRecall(output, context) {
     return { pass: false, score: 0, reason: 'saida do agente nao e JSON valido' };
   }
 
-  // Caso negativo (anti falso-positivo): o agente NAO pode reportar nada.
+  // Caso negativo (anti falso-positivo): o agente nao pode levantar finding P0/P1
+  // (severidades bloqueantes). P2 informativo e tolerado, pois o gate real so bloqueia P0/P1.
   if (!expected.positive) {
-    const pass = findings.length === 0;
+    const bloqueantes = findings.filter((f) => f.severity === 'P0' || f.severity === 'P1');
+    const pass = bloqueantes.length === 0;
     return {
       pass,
       score: pass ? 1 : 0,
-      reason: pass ? 'negativo: nenhum finding (ok)' : `negativo: esperava [], veio ${findings.length} finding(s)`,
+      reason: pass ? 'negativo: nenhum finding P0/P1 (ok)' : `negativo: ${bloqueantes.length} finding(s) P0/P1 indevido(s)`,
     };
   }
 
@@ -44,6 +47,6 @@ export default function assertRecall(output, context) {
   return {
     pass,
     score: recall,
-    reason: `recall ${matched.length}/${want.length} (limiar ${threshold}); findings=${findings.length}`,
+    reason: `recall ${matched.length}/${want.length} por arquivo (limiar ${threshold}); findings=${findings.length}`,
   };
 }

@@ -25,8 +25,8 @@ Para adicionar um caso, crie uma pasta em `tests/fixtures/eval/<caso>/` com dois
 
 1. `diff.patch` — um unified diff git (linhas `+++ b/<caminho>`) com o codigo a revisar.
 2. `expected.json`:
-   - Positivo: `{ "agent": "seguranca", "positive": true, "expected": [{ "file": "...", "severity": "P0" }], "note": "..." }` — `severity` e opcional; o match e por arquivo (+ severidade quando declarada).
-   - Negativo (anti falso-positivo): `{ "agent": "testes", "positive": false, "expected": [], "note": "..." }` — o agente NAO pode reportar nada.
+   - Positivo: `{ "agent": "seguranca", "positive": true, "expected": [{ "file": "...", "severity": "P0" }], "note": "..." }` — o match e por arquivo (a dimensao ja e implicita pelo agente); `severity` fica como nota.
+   - Negativo (anti falso-positivo): `{ "agent": "testes", "positive": false, "expected": [], "note": "..." }` — o agente nao pode levantar finding P0/P1 (severidades bloqueantes); P2 informativo e tolerado.
 
 Nenhum registro extra e necessario: `evals/tests.mjs` varre a pasta e gera um teste por caso.
 

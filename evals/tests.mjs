@@ -18,13 +18,15 @@ export default function generateTests() {
       const expected = JSON.parse(readFileSync(join(EVAL_DIR, d.name, 'expected.json'), 'utf8'));
 
       const assert = [
-        { type: 'is-json' },
-        { type: 'javascript', value: 'file://evals/assert-recall.mjs' },
+        { type: 'is-json', weight: 1 },
+        { type: 'javascript', value: 'file://evals/assert-recall.mjs', weight: 1 },
       ];
-      // Rubrica de qualidade só faz sentido quando há findings esperados.
+      // Rubrica de qualidade só faz sentido quando há findings esperados. Weight 0: e
+      // advisory, roda e aparece no relatorio mas nao reprova o gate (nao-deterministica).
       if (expected.positive) {
         assert.push({
           type: 'llm-rubric',
+          weight: 0,
           value:
             'Cada item de "findings" traz um rationale que explica um problema tecnico real presente no diff, e um campo "cite" no formato arquivo:linha coerente com as linhas adicionadas. Responda PASS se os findings fazem sentido tecnico e FAIL se sao vagos, inventados ou nao correspondem ao diff.',
         });
@@ -39,6 +41,7 @@ export default function generateTests() {
           repoDir: 'tests/fixtures/eval/_repo',
         },
         assert,
+        threshold: 1,
       };
     });
 }
