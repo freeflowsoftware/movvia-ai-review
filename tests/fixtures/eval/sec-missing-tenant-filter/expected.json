@@ -1,0 +1,9 @@
+{
+  "agent": "seguranca",
+  "positive": true,
+  "threshold": 1,
+  "expected": [
+    { "file": "src/faturas/faturas.service.ts", "severity": "P0" }
+  ],
+  "note": "Isolamento multi-tenant quebrado: findMany sem where clienteId em rota autenticada (BOLA/IDOR, OWASP A01)."
+}

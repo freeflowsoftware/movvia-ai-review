@@ -1,0 +1,9 @@
+{
+  "agent": "adr-guardian",
+  "positive": true,
+  "threshold": 1,
+  "expected": [
+    { "file": "pe-migrations/V050__add_split_pagamento.sql", "severity": "P2" }
+  ],
+  "note": "Decisao arquitetural relevante (nova tabela/estrategia de split) sem ADR referenciado no PR."
+}

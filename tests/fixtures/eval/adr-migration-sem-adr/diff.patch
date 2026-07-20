@@ -1,0 +1,14 @@
+diff --git a/pe-migrations/V050__add_split_pagamento.sql b/pe-migrations/V050__add_split_pagamento.sql
+new file mode 100644
+index 0000000..bbbbbbb
+--- /dev/null
++++ b/pe-migrations/V050__add_split_pagamento.sql
+@@ -0,0 +1,8 @@
++-- Nova estrategia de split de pagamento entre concessionarias
++CREATE TABLE IF NOT EXISTS split_pagamento (
++  id BIGSERIAL PRIMARY KEY,
++  pagamento_id VARCHAR(100) NOT NULL,
++  concessionaria_id BIGINT NOT NULL,
++  percentual DECIMAL(5,2) NOT NULL,
++  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
++);

@@ -1,0 +1,13 @@
+diff --git a/src/contas/contas.controller.ts b/src/contas/contas.controller.ts
+index 5555555..6666666 100644
+--- a/src/contas/contas.controller.ts
++++ b/src/contas/contas.controller.ts
+@@ -20,6 +20,11 @@ export class ContasController {
+   constructor(private readonly contasService: ContasService) {}
+
++  @Get('saldo')
++  async saldo(@Query('clienteId') clienteId: string) {
++    // clienteId vem do proprio cliente na querystring
++    return this.contasService.consultarSaldo(clienteId);
++  }
+ }

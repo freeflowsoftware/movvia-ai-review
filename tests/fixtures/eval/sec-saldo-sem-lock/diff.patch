@@ -1,0 +1,15 @@
+diff --git a/src/carteira/debito.service.ts b/src/carteira/debito.service.ts
+index 7777777..8888888 100644
+--- a/src/carteira/debito.service.ts
++++ b/src/carteira/debito.service.ts
+@@ -14,6 +14,13 @@ export class DebitoService {
+   constructor(private readonly prisma: PrismaService) {}
+
++  async debitar(contaId: string, valor: number) {
++    const conta = await this.prisma.conta.findUnique({ where: { id: contaId } });
++    await this.prisma.conta.update({
++      where: { id: contaId },
++      data: { saldoAtual: conta.saldoAtual - valor },
++    });
++  }
+ }

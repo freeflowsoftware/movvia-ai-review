@@ -1,0 +1,26 @@
+diff --git a/src/comum/cpf.ts b/src/comum/cpf.ts
+index 1212121..3434343 100644
+--- a/src/comum/cpf.ts
++++ b/src/comum/cpf.ts
+@@ -1,3 +1,7 @@
++export function apenasDigitos(cpf: string): string {
++  return cpf.replace(/\D/g, '');
++}
++
+ export function formatarCpf(cpf: string): string {
+   return cpf;
+ }
+diff --git a/tests/cpf.test.ts b/tests/cpf.test.ts
+new file mode 100644
+index 0000000..5656565
+--- /dev/null
++++ b/tests/cpf.test.ts
+@@ -0,0 +1,8 @@
++import { describe, it, expect } from 'vitest';
++import { apenasDigitos } from '../src/comum/cpf.js';
++
++describe('apenasDigitos', () => {
++  it('remove pontuacao do CPF', () => {
++    expect(apenasDigitos('123.456.789-09')).toBe('12345678909');
++  });
++});

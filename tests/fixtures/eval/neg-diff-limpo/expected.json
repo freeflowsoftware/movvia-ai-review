@@ -1,0 +1,6 @@
+{
+  "agent": "seguranca",
+  "positive": false,
+  "expected": [],
+  "note": "Anti-FP: normalizacao de string trivial, sem problema de seguranca. Deve retornar []."
+}

@@ -1,0 +1,2 @@
+# repoDir mínimo compartilhado pelas fixtures de eval. O agent-runner-cli degrada
+# gracioso sem .claude/rules/ADRs (agent-runner-cli.ts:17-57,87-97).

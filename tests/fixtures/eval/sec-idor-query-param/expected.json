@@ -1,0 +1,9 @@
+{
+  "agent": "seguranca",
+  "positive": true,
+  "threshold": 1,
+  "expected": [
+    { "file": "src/contas/contas.controller.ts", "severity": "P0" }
+  ],
+  "note": "IDOR por origem de parametro: clienteId chega por @Query (controlado pelo cliente) em operacao sensivel, em vez de @CurrentUser/token."
+}

@@ -1,0 +1,12 @@
+diff --git a/src/faturas/faturas.service.ts b/src/faturas/faturas.service.ts
+index 3333333..4444444 100644
+--- a/src/faturas/faturas.service.ts
++++ b/src/faturas/faturas.service.ts
+@@ -12,6 +12,10 @@ export class FaturasService {
+   constructor(private readonly prisma: PrismaService) {}
+
++  async listarTodas(@CurrentUser() user: Usuario) {
++    // lista faturas para a tela do cliente logado
++    return this.prisma.fatura.findMany({ orderBy: { criadoEm: 'desc' } });
++  }
+ }
