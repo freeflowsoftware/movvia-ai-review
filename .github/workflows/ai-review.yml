@@ -44,6 +44,7 @@ jobs:
     # Pipeline completo so no evento de PR; no review_comment quem roda e o judge-pushback.
     if: inputs.event != 'review_comment'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -90,6 +91,7 @@ jobs:
     # propaga o skip aos dependentes (needs de job skipped nao roda) no review_comment.
     if: inputs.event != 'review_comment'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
@@ -118,6 +120,7 @@ jobs:
   context-pack:
     needs: discover
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -190,6 +193,7 @@ jobs:
     # o pipeline de findings (review→gatekeeper→post). O walkthrough e best-effort.
     continue-on-error: true
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -237,6 +241,7 @@ jobs:
   review:
     needs: [discover, context-pack]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
@@ -306,14 +311,21 @@ jobs:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        # PED-2729: erro transitorio de LLM (timeout/429/5xx) ja tenta de novo dentro do
+        # agent-runner-cli (withRetry); se mesmo assim falhar apos os retries, emitimos
+        # anotacao ::error visivel no Summary do Actions e preservamos o exit code de falha.
+        # Fail-closed: a leg da matrix falha -> o job "review" falha -> o gatekeeper (needs:
+        # review) nao roda e nenhum veredicto e postado (nao ha APPROVE silencioso). A
+        # contabilizacao de veredicto PARCIAL por dimensao perdida e escopo do candidato 06.
         run: |
           export PR_TITLE="$(cat /tmp/pr-title.txt)"
-          cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff /tmp/context-pack/context-pack.json > "/tmp/findings-${AGENT_NAME}.json"
+          cd _review && npx tsx lib/agent-runner-cli.ts "$AGENT_NAME" "$GITHUB_WORKSPACE" /tmp/pr.diff /tmp/context-pack/context-pack.json > "/tmp/findings-${AGENT_NAME}.json" || { echo "::error title=AI Review::dimensao '${AGENT_NAME}' falhou apos os retries do LLM"; exit 1; }
       - uses: actions/upload-artifact@v4
         with: { name: "findings-${{ matrix.name }}", path: "/tmp/findings-${{ matrix.name }}.json" }
   gatekeeper:
     needs: review
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -366,6 +378,7 @@ jobs:
   post:
     needs: gatekeeper
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -417,6 +430,7 @@ jobs:
   judge-pushback:
     if: inputs.event == 'review_comment'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
