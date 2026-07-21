@@ -295,7 +295,10 @@ describe('job context-pack alimenta o review (Fase 1c)', () => {
 
   it('o job context-pack roda o context-pack-cli a partir do checkout central', () => {
     const step = findStep(wf, 'context-pack', 'context-pack');
-    expect(step.run ?? '').toContain('_review/lib/context-pack-cli.ts');
+    // cd _review && ... lib/context-pack-cli.ts: o CLI vive no checkout central e roda de
+    // dentro dele (binary-shadowing — ver describe do checkout no head do PR).
+    expect(step.run ?? '').toContain('cd _review');
+    expect(step.run ?? '').toContain('lib/context-pack-cli.ts');
     expect(step.run ?? '').toContain('"$GITHUB_WORKSPACE"');
   });
 
@@ -325,6 +328,42 @@ describe('job context-pack alimenta o review (Fase 1c)', () => {
     // 4o argv: <agentName> <repoDir> <diffPath> <packPath>. O caminho do pack baixado
     // deve aparecer depois de /tmp/pr.diff na linha de invocacao.
     expect(run).toMatch(/agent-runner-cli\.ts.*\/tmp\/pr\.diff.*context-pack\.json/s);
+  });
+});
+
+// FIX issue_comment: no re-run via /ai-review o github.ref e o default branch, entao o
+// checkout do repo ALVO sem `ref` leria a main — o context-pack (camada 1: arquivo inteiro,
+// irmaos, imports) e o repoDir do agente refletiriam codigo SEM as mudancas do PR, e o
+// refuter refutaria findings contra excerpts velhos. Travamos o ref explicito no head do PR
+// (refs/pull/N/head, nao /merge — o merge ref some quando o PR conflita).
+describe('checkout do repo alvo aponta pro head do PR (re-run via /ai-review)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow;
+
+  for (const jobId of ['context-pack', 'review']) {
+    it(`o job ${jobId} faz checkout do alvo com ref refs/pull/N/head`, () => {
+      const step = findStep(wf, jobId, 'Checkout repo alvo');
+      expect(String(step.with?.ref ?? '')).toBe('refs/pull/${{ inputs.pr_number }}/head');
+    });
+
+    // O workspace passa a conter codigo nao-confiavel do PR; nenhum step posterior usa
+    // credencial git (gh autentica via GH_TOKEN do env). Travamos a mitigacao nos DOIS
+    // checkouts do job (alvo e central _review) para ela nao sumir em refactor — o token
+    // do checkout central (AI_REVIEW_REPO_TOKEN) persistido em .git/config seria
+    // exfiltravel por qualquer execucao comprometida no runner (zizmor artipacked).
+    it(`o job ${jobId} nao persiste credenciais nos checkouts (alvo e central)`, () => {
+      expect(findStep(wf, jobId, 'Checkout repo alvo').with?.['persist-credentials']).toBe(false);
+      expect(findStep(wf, jobId, 'Checkout central').with?.['persist-credentials']).toBe(false);
+    });
+  }
+
+  // Binary-shadowing: o npx resolve ./node_modules/.bin do cwd primeiro; rodar o CLI da
+  // raiz do checkout nao-confiavel permitiria a um PR malicioso commitar um tsx falso.
+  // O step DEVE rodar de dentro de _review (mesmo padrao do job review).
+  it('o step Gerar context-pack roda de dentro de _review (nao do cwd nao-confiavel)', () => {
+    const run = findStep(wf, 'context-pack', 'Gerar context-pack').run ?? '';
+    expect(run).toMatch(/cd _review &&\s+npx tsx lib\/context-pack-cli\.ts/);
   });
 });
 

@@ -124,9 +124,18 @@ jobs:
     steps:
       # Checkout do repo ALVO no cwd com fetch-depth:0: o context-pack le arquivos inteiros,
       # irmaos e imports do codebase real (nao so o diff), entao precisa da arvore completa.
+      # ref EXPLICITO no head do PR: no evento issue_comment (/ai-review) o github.ref e o
+      # default branch, e o checkout sem ref leria a main — o pack entregaria os arquivos
+      # SEM as mudancas do PR (agente e refuter avaliando contra codigo velho). Usamos
+      # refs/pull/N/head (nao /merge): o merge ref deixa de existir quando o PR conflita.
+      # persist-credentials: false — o workspace contem codigo nao-confiavel do PR; nada
+      # depois do checkout usa credencial git (gh usa GH_TOKEN do env), entao nao persiste.
       - name: Checkout repo alvo
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          fetch-depth: 0
+          persist-credentials: false
       - name: Checkout central
         uses: actions/checkout@v4
         with:
@@ -134,6 +143,9 @@ jobs:
           ref: v1
           path: _review
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+          # Nao persistir o AI_REVIEW_REPO_TOKEN em _review/.git/config: o job coexiste com
+          # codigo nao-confiavel do PR no workspace e nada apos o checkout usa credencial git.
+          persist-credentials: false
       # As deps deste job vem do checkout central em _review (o checkout alvo no cwd nao tem
       # o lockfile do review), por isso cacheamos _review/pnpm-lock.yaml (padrao Fase 0).
       # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
@@ -160,7 +172,11 @@ jobs:
       - name: Gerar context-pack
         # context-pack-cli.ts <repoDir> <diffPath> → ContextPack JSON em stdout. repoDir e o
         # workspace do checkout alvo; o CLI le defaults.yml do central (import.meta.dirname).
-        run: npx tsx _review/lib/context-pack-cli.ts "$GITHUB_WORKSPACE" /tmp/pr.diff > context-pack.json
+        # cd _review (mesmo padrao do job review): o npx resolve binarios primeiro em
+        # ./node_modules/.bin do cwd — rodar da raiz do checkout NAO-confiavel permitiria a
+        # um PR malicioso commitar node_modules/.bin/tsx e executar codigo no runner.
+        # O redirect usa $GITHUB_WORKSPACE porque o upload-artifact le do workspace, nao do cwd.
+        run: cd _review && npx tsx lib/context-pack-cli.ts "$GITHUB_WORKSPACE" /tmp/pr.diff > "$GITHUB_WORKSPACE/context-pack.json"
       - uses: actions/upload-artifact@v4
         with: { name: context-pack, path: context-pack.json }
   # Walkthrough: corre em PARALELO com o review (ambos precisam so do context-pack).
@@ -225,9 +241,16 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
+      # ref explicito no head do PR pelo mesmo motivo do job context-pack: no issue_comment
+      # (/ai-review) o checkout sem ref leria a main, e loadRepoRules/loadAdrs + o repoDir
+      # do agente refletiriam codigo sem as mudancas do PR. persist-credentials: false
+      # pelo mesmo motivo do context-pack (workspace nao-confiavel, git nao e mais usado).
       - name: Checkout repo alvo
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          fetch-depth: 0
+          persist-credentials: false
       - name: Checkout central
         uses: actions/checkout@v4
         with:
@@ -235,6 +258,8 @@ jobs:
           ref: v1
           path: _review
           token: ${{ secrets.AI_REVIEW_REPO_TOKEN || github.token }}
+          # Mesmo motivo do context-pack: workspace nao-confiavel, git nao e usado apos o checkout.
+          persist-credentials: false
       # As deps deste job vem do checkout central em _review (o checkout alvo no cwd
       # nao tem o lockfile do review), por isso cacheamos _review/pnpm-lock.yaml.
       # npm i -g pnpm (nao pnpm/action-setup): em jobs que fazem checkout do repo ALVO
