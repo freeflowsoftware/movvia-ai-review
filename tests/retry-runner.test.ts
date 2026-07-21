@@ -185,14 +185,11 @@ describe('realChatRunner: mapeamento status -> transient', () => {
       status: 429,
       text: async () => 'rate',
     })) as unknown as typeof fetch;
-    try {
-      await realChatRunner('m', 's', 'u');
-      throw new Error('deveria ter rejeitado');
-    } catch (err) {
-      expect(err).toBeInstanceOf(LlmError);
-      expect((err as LlmError).transient).toBe(true);
-      expect((err as LlmError).status).toBe(429);
-    }
+    await expect(realChatRunner('m', 's', 'u')).rejects.toMatchObject({
+      name: 'LlmError',
+      transient: true,
+      status: 429,
+    });
   });
 
   it('400 (modelo invalido) nao e transitorio', async () => {
@@ -203,13 +200,10 @@ describe('realChatRunner: mapeamento status -> transient', () => {
       status: 400,
       text: async () => 'invalid model',
     })) as unknown as typeof fetch;
-    try {
-      await realChatRunner('m', 's', 'u');
-      throw new Error('deveria ter rejeitado');
-    } catch (err) {
-      expect(err).toBeInstanceOf(LlmError);
-      expect((err as LlmError).transient).toBe(false);
-      expect((err as LlmError).status).toBe(400);
-    }
+    await expect(realChatRunner('m', 's', 'u')).rejects.toMatchObject({
+      name: 'LlmError',
+      transient: false,
+      status: 400,
+    });
   });
 });
