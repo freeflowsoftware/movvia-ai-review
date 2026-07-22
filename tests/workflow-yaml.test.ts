@@ -388,3 +388,46 @@ describe('context-pack alimenta o refuter do gatekeeper (Fase 2)', () => {
     expect(run).toMatch(/gatekeeper\.ts.*\/tmp\/pr\.diff.*context-pack\.json/s);
   });
 });
+
+// PED-2728: /ai-review dismiss aplica lib/dismiss.ts no job post ANTES do post.ts (mesmo
+// job = sequencial, sem corrida no store). O caller tem um job dismiss (event=dismiss) sob o
+// mesmo fork-guard, e o job call NAO dispara para o sub-comando (senao rodaria em duplicidade).
+describe('dismiss por comando esta fiado no pipeline (PED-2728)', () => {
+  const wf = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/workflows/ai-review.yml'), 'utf8'),
+  ) as Workflow & { on?: { workflow_call?: { inputs?: Record<string, unknown> } } };
+
+  it('o reusable aceita event=dismiss (input event existe)', () => {
+    const inputs = wf.on?.workflow_call?.inputs ?? {};
+    expect(Object.keys(inputs)).toContain('event');
+  });
+
+  it('o job post roda lib/dismiss.ts ANTES do lib/post.ts, com COMMENT_ID no env', () => {
+    const steps = wf.jobs?.post?.steps ?? [];
+    const dismissStep = steps.find((s) => (s.run ?? '').includes('lib/dismiss.ts'));
+    const postStep = steps.find((s) => (s.run ?? '').includes('lib/post.ts'));
+    expect(dismissStep).toBeDefined();
+    expect(postStep).toBeDefined();
+    expect(steps.indexOf(dismissStep!)).toBeLessThan(steps.indexOf(postStep!));
+    expect(Object.keys(dismissStep!.env ?? {})).toEqual(expect.arrayContaining(['COMMENT_ID', 'PR_NUMBER', 'GH_REPO']));
+  });
+
+  const caller = YAML.parse(
+    readFileSync(resolve(repoRoot, '.github/caller-template.yml'), 'utf8'),
+  ) as { jobs?: Record<string, { if?: string; with?: Record<string, unknown> }> };
+
+  it('o caller tem job dismiss com event=dismiss + comment_id sob fork-guard', () => {
+    const job = caller.jobs?.dismiss;
+    expect(job).toBeDefined();
+    expect(String(job!.if)).toContain('github.event.comment.author_association');
+    expect(String(job!.if)).toContain('/ai-review dismiss');
+    expect(String(job!.with?.event)).toBe('dismiss');
+    expect(String(job!.with?.comment_id)).toContain('github.event.comment.id');
+  });
+
+  it('o job call do caller NAO dispara para /ai-review dismiss (sem double-run)', () => {
+    const cond = caller.jobs?.call?.if ?? '';
+    expect(cond).toContain("!startsWith(github.event.comment.body, '/ai-review dismiss')");
+    expect(cond).toContain("!startsWith(github.event.comment.body, '/ai-review undismiss')");
+  });
+});

@@ -173,12 +173,16 @@ function reconcileScope(
 function buildInlineBody(f: Finding): string {
   // Carrega tudo que o autor humano precisa para agir e termina com o marker
   // invisivel — ancora estavel de dedup idempotente entre re-runs (findingMarker).
+  // A linha de dismiss expoe o comando pronto pra copiar (PED-2728): o findingId e hash,
+  // nao digitavel de cabeca, entao ja o embutimos ao lado do marker que o carrega.
   return [
     `**${f.severity}** — ${f.title}`,
     '',
     f.rationale,
     '',
     `**Sugestao:** ${f.suggestion}`,
+    '',
+    `_Falso-positivo? Dispense com:_ \`/ai-review dismiss ${findingId(f)} <motivo>\``,
     '',
     findingMarker(f),
   ].join('\n');

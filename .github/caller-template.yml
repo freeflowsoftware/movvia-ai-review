@@ -18,15 +18,35 @@ jobs:
     # JIRA_API_TOKEN. Exigimos que o comentario seja em um PR (nao issue) E que o autor
     # seja membro do repo (OWNER/MEMBER/COLLABORATOR) — author_association de fork e
     # CONTRIBUTOR/NONE/FIRST_TIME_*. O branch pull_request permanece normal.
+    # PED-2728: `/ai-review dismiss|undismiss` NAO cai aqui (job dismiss cuida) — senao o
+    # pipeline rodaria em duplicidade. As negacoes isolam o sub-comando.
     if: >-
       github.event_name == 'pull_request' ||
       (startsWith(github.event.comment.body, '/ai-review') &&
+       !startsWith(github.event.comment.body, '/ai-review dismiss') &&
+       !startsWith(github.event.comment.body, '/ai-review undismiss') &&
        github.event.issue.pull_request &&
        contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     uses: freeflowsoftware/movvia-ai-review/.github/workflows/ai-review.yml@v1
     with:
       pr_number: ${{ github.event.pull_request.number || github.event.issue.number }}
       full_review: ${{ contains(github.event.comment.body, '--full') }}
+    secrets: inherit
+
+  dismiss:
+    # PED-2728: /ai-review dismiss|undismiss <findingId> <motivo>. Mesmo fork-guard do call.
+    # Roda o pipeline com event=dismiss: o job post aplica lib/dismiss.ts ANTES do post.ts.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/ai-review dismiss') ||
+       startsWith(github.event.comment.body, '/ai-review undismiss')) &&
+      contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    uses: freeflowsoftware/movvia-ai-review/.github/workflows/ai-review.yml@v1
+    with:
+      pr_number: ${{ github.event.issue.number }}
+      event: dismiss
+      comment_id: ${{ github.event.comment.id }}
     secrets: inherit
 
   judge:

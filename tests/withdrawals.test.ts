@@ -4,6 +4,7 @@ import {
   parseWithdrawals,
   buildWithdrawalsComment,
   upsertWithdrawal,
+  upsertDismissal,
   computeValidWithdrawals,
   type Withdrawal,
 } from '../lib/withdrawals.js';
@@ -63,6 +64,34 @@ describe('upsertWithdrawal', () => {
   it('REJEITA severity P0 (store nunca contem P0 — guarda inviolavel)', () => {
     const out = upsertWithdrawal([], entry({ severity: 'P0' }));
     expect(out).toEqual([]);
+  });
+});
+
+// PED-2728: a dispensa manual por comando grava com upsertDismissal (nao upsertWithdrawal)
+// e carrega o motivo obrigatorio. P0 so entra com allowP0=true (CODEOWNER + flag, ADR-002).
+describe('motivo (dispensa manual) round-trip', () => {
+  it('preserva o campo motivo no build -> parse', () => {
+    const list = [entry({ motivo: 'falso-positivo: guard X ja cobre' })];
+    expect(parseWithdrawals(buildWithdrawalsComment(list))).toEqual(list);
+  });
+});
+
+describe('upsertDismissal (comando, P0 gated por allowP0)', () => {
+  it('P1/P2 entram independente de allowP0', () => {
+    expect(upsertDismissal([], entry({ severity: 'P1' }), false)).toHaveLength(1);
+  });
+  it('P0 com allowP0=false -> rejeitado (default bloqueado)', () => {
+    expect(upsertDismissal([], entry({ severity: 'P0' }), false)).toEqual([]);
+  });
+  it('P0 com allowP0=true -> entra (CODEOWNER autorizou)', () => {
+    const out = upsertDismissal([], entry({ severity: 'P0' }), true);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.severity).toBe('P0');
+  });
+  it('idempotente por findingId (atualiza em vez de empilhar)', () => {
+    const out = upsertDismissal([entry({ motivo: 'v1' })], entry({ motivo: 'v2' }), false);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.motivo).toBe('v2');
   });
 });
 
