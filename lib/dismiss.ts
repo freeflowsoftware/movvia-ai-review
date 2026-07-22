@@ -161,6 +161,7 @@ export interface DismissConfig {
   minMotivoLen: number;
   allowP0Policy: boolean;
   feedbackModel: string;
+  feedbackRepo: string;
 }
 
 /**
@@ -210,11 +211,19 @@ async function applyDismiss(
     acceptedAt: input.now, acceptedBy: input.author, category: finding.category, file: finding.file, motivo,
   };
   const list = await deps.readWithdrawals();
-  await deps.writeWithdrawals(upsertDismissal(list, entry, finding.severity === 'P0'));
-  await deps.resolveThreadFor(finding.findingId);
-  await deps.reply(
-    `movvia-ai-review: finding \`${finding.findingId}\` (${finding.severity}) dispensado por @${input.author}.\nMotivo: ${motivo}\nO verdict sera recomputado; expira se \`${finding.file}\` mudar.`,
-  );
+  // allowP0 = autorização REAL (política + CODEOWNER), não "é P0?" — preserva a
+  // defesa-em-profundidade do upsertDismissal (para P1/P2 isOwner é false e o arg é ignorado).
+  await deps.writeWithdrawals(upsertDismissal(list, entry, cfg.allowP0Policy && isOwner));
+  // Pós-write best-effort: o store já está durável. Nada aqui pode FALHAR o step (senão o
+  // post.ts seguinte não roda e o check não recomputa) nem desfazer o dismiss.
+  try {
+    await deps.resolveThreadFor(finding.findingId);
+    await deps.reply(
+      `movvia-ai-review: finding \`${finding.findingId}\` (${finding.severity}) dispensado por @${input.author}.\nMotivo: ${motivo}\nO verdict sera recomputado; expira se \`${finding.file}\` mudar.`,
+    );
+  } catch (e) {
+    console.log(`pos-dismiss (resolve/reply) pulado: ${(e as Error).message}`);
+  }
   await openFeedback(finding, motivo, input, deps, cfg);
 }
 
@@ -266,9 +275,12 @@ if (process.argv[1]?.endsWith('dismiss.ts')) {
     : octokit;
 
   const cfg = readDismissConfig(join(import.meta.dirname, '..', 'config', 'defaults.yml'));
-  const pr = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
+  // Independentes -> em paralelo (uma ida de rede em vez de duas).
+  const [pr, comment] = await Promise.all([
+    octokit.pulls.get({ owner, repo, pull_number: prNumber }),
+    octokit.issues.getComment({ owner, repo, comment_id: commentId }),
+  ]);
   const headSha = pr.data.head.sha;
-  const comment = await octokit.issues.getComment({ owner, repo, comment_id: commentId });
   const commentBody = comment.data.body ?? '';
   const author = comment.data.user?.login ?? '';
 
@@ -285,9 +297,10 @@ if (process.argv[1]?.endsWith('dismiss.ts')) {
         minMotivoLen: Number(d.min_motivo_len ?? 15),
         allowP0Policy: d.allow_p0_by_codeowner === true,
         feedbackModel: String(process.env.FEEDBACK_MODEL || d.feedback_model || 'deepseek/deepseek-v4-flash'),
+        feedbackRepo: String(process.env.FEEDBACK_REPO || d.feedback_repo || 'freeflowsoftware/movvia-ai-review'),
       };
     } catch {
-      return { minMotivoLen: 15, allowP0Policy: false, feedbackModel: 'deepseek/deepseek-v4-flash' };
+      return { minMotivoLen: 15, allowP0Policy: false, feedbackModel: 'deepseek/deepseek-v4-flash', feedbackRepo: 'freeflowsoftware/movvia-ai-review' };
     }
   }
 
@@ -312,19 +325,20 @@ if (process.argv[1]?.endsWith('dismiss.ts')) {
         for (const team of teamOwners(owners)) {
           const [org = '', slug = ''] = team.replace(/^@/, '').split('/');
           try {
-            await centralOctokit.teams.getMembershipForUserInOrg({ org, team_slug: slug, username: login });
-            return true;
+            const m = await centralOctokit.teams.getMembershipForUserInOrg({ org, team_slug: slug, username: login });
+            // 200 tambem cobre state='pending' (convite nao aceito) — so 'active' e membro real.
+            if (m.data.state === 'active') return true;
           } catch { /* nao e membro / sem permissao -> fail-closed */ }
         }
         return false;
       },
       readWithdrawals: async () => {
-        const comments = (await octokit.issues.listComments({ owner, repo, issue_number: prNumber })).data;
+        const comments = (await octokit.issues.listComments({ owner, repo, issue_number: prNumber, per_page: 100 })).data;
         const w = comments.find((c) => c.body?.includes(withdrawalsMarker));
         return w ? parseWithdrawals(w.body ?? '') : [];
       },
       writeWithdrawals: async (list) => {
-        const comments = (await octokit.issues.listComments({ owner, repo, issue_number: prNumber })).data;
+        const comments = (await octokit.issues.listComments({ owner, repo, issue_number: prNumber, per_page: 100 })).data;
         const w = comments.find((c) => c.body?.includes(withdrawalsMarker));
         const body = buildWithdrawalsComment(list);
         if (w) await octokit.issues.updateComment({ owner, repo, comment_id: w.id, body });
@@ -341,8 +355,10 @@ if (process.argv[1]?.endsWith('dismiss.ts')) {
       fileProvider: (file) => getFileAtRef(contentClient, target, file, headSha).then((c) => c ?? ''),
       run: realChatRunner,
       createFeedbackIssue: async (issue) => {
-        const [fbOwner = 'freeflowsoftware', fbRepo = 'movvia-ai-review'] = (process.env.FEEDBACK_REPO || 'freeflowsoftware/movvia-ai-review').split('/');
-        const existentes = (await centralOctokit.issues.listForRepo({ owner: fbOwner, repo: fbRepo, state: 'open', labels: 'dismiss-feedback', per_page: 100 })).data;
+        const [fbOwner = 'freeflowsoftware', fbRepo = 'movvia-ai-review'] = cfg.feedbackRepo.split('/');
+        // state:'all' (nao 'open'): uma issue ja FECHADA (triada) do mesmo findingId ainda
+        // conta como existente — evita reabrir duplicata a cada re-dismiss.
+        const existentes = (await centralOctokit.issues.listForRepo({ owner: fbOwner, repo: fbRepo, state: 'all', labels: 'dismiss-feedback', per_page: 100 })).data;
         const jaExiste = existentes.find((i) => (i.body ?? '').includes(feedbackIssueMarker(issue.findingId)));
         if (jaExiste) return jaExiste.html_url;
         const criada = await centralOctokit.issues.create({ owner: fbOwner, repo: fbRepo, title: issue.title, body: issue.body, labels: issue.labels });

@@ -117,7 +117,7 @@ const input = (commentBody: string): DismissInput => ({
   commentBody, author: 'dev', headSha: 'sha1', now: '2026-07-22T00:00:00Z', prUrl: 'http://pr/1',
 });
 const cfg = (over: Partial<DismissConfig> = {}): DismissConfig => ({
-  minMotivoLen: 15, allowP0Policy: false, feedbackModel: 'm', ...over,
+  minMotivoLen: 15, allowP0Policy: false, feedbackModel: 'm', feedbackRepo: 'freeflowsoftware/movvia-ai-review', ...over,
 });
 
 describe('dismissRun (invariantes)', () => {

@@ -406,6 +406,13 @@ jobs:
       # (mesmo job = sequencial, sem corrida no read-modify-write do store). lib/dismiss.ts
       # grava o Withdrawal e o post.ts seguinte rele o store, suprime e recomputa o verdict,
       # re-emitindo review-bot/verdict. So roda no event=dismiss.
+      # CUSTO (trade-off consciente): event=dismiss re-roda o pipeline INTEIRO (agentes LLM)
+      # so para recomputar o verdict, pois o post.ts precisa de um verdict.json fresco. Aceito
+      # no v1 (dismiss e raro/humano); otimizacao futura = reusar o verdict.json do run anterior
+      # (ver docs/superpowers/plans/2026-07-22-...). REVISAR-ACID: o dismiss e one-shot; se o run
+      # ficar PENDENTE no concurrency group e for superado, o GitHub o cancela e o comando se
+      # perde sem feedback. Mitigacao atual: o comando e IDEMPOTENTE — basta re-comentar. Fila de
+      # replay de comandos nao-aplicados fica como follow-up.
       - name: Aplicar dismiss (event=dismiss)
         if: inputs.event == 'dismiss'
         env:
