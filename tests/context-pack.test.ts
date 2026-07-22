@@ -411,6 +411,40 @@ describe('buildPresenceIndex', () => {
     const index = buildPresenceIndex('/qualquer', listDirFails);
     expect(index).toEqual({ symbols: [], testSubjects: [], envKeys: [] });
   });
+
+  // Regressao: sem sort, a ordem herda de listDir/walkRepo (nao garantida pelo POSIX). Isso
+  // fazia o context-pack.json diferir entre runs equivalentes em FS/hosts diferentes.
+  it('DETERMINISMO: symbols/testSubjects/envKeys sao ordenados alfabeticamente na saida', () => {
+    const { dir, write } = makeRepo();
+    write('src/z-comp.ts', 'export class Zebra {}');
+    write('src/a-comp.ts', 'export class Alfa {}');
+    write('src/m-comp.ts', 'export class Meio {}');
+    write('hooks/__tests__/zeta.test.ts', "import { zeta } from '../zeta';\n");
+    write('hooks/__tests__/alpha.test.ts', "import { alpha } from '../alpha';\n");
+    write('.env.example', 'ZED=1\nALPHA=1\nMID=1\n');
+
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+
+    const codeSymbols = index.symbols.filter((s) => ['Alfa', 'Meio', 'Zebra'].includes(s));
+    expect(codeSymbols).toEqual(['Alfa', 'Meio', 'Zebra']);
+    expect(index.testSubjects).toEqual([...index.testSubjects].sort());
+    expect(index.envKeys).toEqual(['ALPHA', 'MID', 'ZED']);
+  });
+
+  // Regressao (P0 v3): NAMED_BINDING_REGEX usava \s* guloso que cruza \n. Arquivo com
+  // muitas linhas em branco sem `export const/let/var` disparava backtracking catastrofico
+  // (>60s em 262KB). Fix: \s* -> [ \t]*.
+  it('DoS FIX: arquivo com muitas linhas em branco NAO trava NAMED_BINDING_REGEX (era >60s)', () => {
+    const { dir, write } = makeRepo();
+    const adversarial = 'export class Real {}\n' + '\n'.repeat(200_000);
+    write('src/real.ts', adversarial);
+    const t0 = performance.now();
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    const elapsed = performance.now() - t0;
+    expect(index.symbols).toContain('Real');
+    // Era >60s com \s*; com [ \t]* fica <100ms mesmo em CI lento.
+    expect(elapsed).toBeLessThan(500);
+  });
 });
 
 describe('buildContextPack presenceIndex', () => {

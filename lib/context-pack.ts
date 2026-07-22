@@ -528,7 +528,10 @@ const NAMED_DECL_REGEX =
 // Exige `export`: um binding LOCAL (dentro de funcao) nunca e o que um finding quer dizer com
 // "X ausente/nao definido", e indexa-lo so inflaria o indice com milhares de variaveis locais.
 // Declaracoes class/function/model (mesmo nao exportadas) seguem cobertas por NAMED_DECL_REGEX.
-const NAMED_BINDING_REGEX = /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+// [ \t]* (nao \s*): whitespace inicial so na MESMA linha do `export`. \s* cruza \n e faz
+// backtracking catastrofico em arquivo com muitas linhas em branco sem export subsequente
+// (reproduzido: >60s em 262KB) — evita esse ReDoS por construcao.
+const NAMED_BINDING_REGEX = /^[ \t]*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
 // Allowlist de extensoes que declaram simbolos: so essas linguagens tem class/model/const etc.
 // Evita ler/regexar lockfiles, JSON, assets, .md — a maior fonte de custo em monorepo (F1).
 const INDEXABLE_EXT_REGEX = /\.(ts|tsx|js|jsx|mjs|cjs|java|py|prisma)$/;
@@ -581,6 +584,13 @@ export function buildPresenceIndex(repoDir: string, fs: FileSystemReader = nodeF
       for (const s of collectMatches(content, NAMED_DECL_REGEX)) symbols.add(s);
       for (const s of collectMatches(content, NAMED_BINDING_REGEX)) symbols.add(s);
     }
-    return { symbols: [...symbols], testSubjects: [...testSubjects], envKeys: [...envKeys] };
+    // Sort deterministico: listDir/walkRepo nao garantem ordem estavel entre FS/hosts. Sem
+    // sort, o context-pack.json diferiria entre runs equivalentes — quebra reproducibilidade,
+    // diff em snapshot e cache por hash do artefato. Custo trivial (N nomes curtos).
+    return {
+      symbols: [...symbols].sort(),
+      testSubjects: [...testSubjects].sort(),
+      envKeys: [...envKeys].sort(),
+    };
   }, EMPTY_PRESENCE_INDEX);
 }

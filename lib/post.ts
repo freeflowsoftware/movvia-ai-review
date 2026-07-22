@@ -1,6 +1,7 @@
 import type { Finding, Verdict } from './types.js';
 import type { ReviewEvent } from './github.js';
-import { findingId, type SuppressedByPresence } from './gatekeeper.js';
+import { findingId } from './gatekeeper.js';
+import type { SuppressedByPresence } from './gatekeeper-patterns.js';
 import { parseCite } from './cite-the-line.js';
 import { readVerifyConfig, verifyZombieThreads, type ZombieThread } from './verify-fix.js';
 

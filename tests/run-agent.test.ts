@@ -100,6 +100,44 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
     await expect(realChatRunner('m', 's', 'u')).rejects.toThrow(/timeout apos \d+ms/);
   });
 
+  // Regressao critica: o wrapper de timeout DEVE preservar err.name E err.cause. Sem isso,
+  // isTimeoutError (que agora classifica por tipo estruturado, sem heuristica textual) nao
+  // reconhece o erro embrulhado, retryOnTimeout nao retria, e o retry legitimo se perde
+  // silenciosamente. Antes desta cobertura, remover as duas linhas de preservacao mantinha
+  // todos os testes verdes — invariante critico sem guard.
+  it('preserva err.name=TimeoutError E err.cause no timeout embrulhado (retry funciona)', async () => {
+    let fetchCalls = 0;
+    const original = Object.assign(new Error('aborted'), { name: 'TimeoutError' });
+    globalThis.fetch = (async () => {
+      fetchCalls++;
+      throw original;
+    }) as typeof fetch;
+    let captured: unknown;
+    try {
+      await realChatRunner('m', 's', 'u');
+    } catch (e) {
+      captured = e;
+    }
+    expect(captured).toBeInstanceOf(Error);
+    const err = captured as Error;
+    expect(err.name).toBe('TimeoutError');
+    expect(err.cause).toBe(original);
+    // retryOnTimeout(attempts=2): TimeoutError classificado corretamente => 2 chamadas de fetch.
+    expect(fetchCalls).toBe(2);
+  });
+
+  it('preserva AbortError tambem (nao so TimeoutError)', async () => {
+    const original = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    globalThis.fetch = (async () => { throw original; }) as typeof fetch;
+    let captured: unknown;
+    try {
+      await realChatRunner('m', 's', 'u');
+    } catch (e) { captured = e; }
+    const err = captured as Error;
+    expect(err.name).toBe('AbortError');
+    expect(err.cause).toBe(original);
+  });
+
   it('propaga erro não-timeout intacto (não mascara como timeout)', async () => {
     globalThis.fetch = (async () => { throw new Error('ECONNRESET'); }) as typeof fetch;
     await expect(realChatRunner('m', 's', 'u')).rejects.toThrow('ECONNRESET');
@@ -118,16 +156,51 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
 });
 
 describe('isTimeoutError', () => {
-  it('reconhece TimeoutError/AbortError e mensagens de timeout', () => {
+  it('reconhece TimeoutError/AbortError por name', () => {
     const to = new Error('x'); to.name = 'TimeoutError';
     const ab = new Error('x'); ab.name = 'AbortError';
     expect(isTimeoutError(to)).toBe(true);
     expect(isTimeoutError(ab)).toBe(true);
-    expect(isTimeoutError(new Error('chat-completion timeout apos 60000ms'))).toBe(true);
+  });
+  it('reconhece timeout via err.cause.name (undici embrulha em TypeError)', () => {
+    const inner = new Error('inner'); inner.name = 'TimeoutError';
+    const outer = new TypeError('fetch failed');
+    outer.cause = inner;
+    expect(isTimeoutError(outer)).toBe(true);
+  });
+  it('reconhece codigos de timeout de undici (HEADERS/BODY/CONNECT)', () => {
+    // .code é add-on de undici — não parte do tipo Error padrão; cast é intencional aqui.
+    const err = Object.assign(new Error('boom'), { code: 'UND_ERR_HEADERS_TIMEOUT' });
+    expect(isTimeoutError(err)).toBe(true);
+    const wrapped = new TypeError('fetch failed');
+    wrapped.cause = { code: 'UND_ERR_BODY_TIMEOUT' };
+    expect(isTimeoutError(wrapped)).toBe(true);
+  });
+  // Regressao critica: heuristica textual era FONTE DE POST DUPLICADO.
+  // HTTP 504 ou "invalid timeout param" (contrato) contem "timeout" mas NAO deve repetir.
+  it('NAO trata erros de contrato com "timeout" no texto como timeout (evita POST duplicado)', () => {
+    expect(isTimeoutError(new Error('HTTP 504 — Gateway Timeout'))).toBe(false);
+    expect(isTimeoutError(new Error('HTTP 422 — invalid timeout parameter'))).toBe(false);
+    expect(isTimeoutError(new Error('chat-completion timeout apos 60000ms'))).toBe(false);
   });
   it('nao trata erros comuns como timeout', () => {
     expect(isTimeoutError(new Error('HTTP 500'))).toBe(false);
     expect(isTimeoutError('string')).toBe(false);
+    expect(isTimeoutError(null)).toBe(false);
+    expect(isTimeoutError({ name: 'TimeoutError' })).toBe(false); // nao e Error real
+  });
+  // Cobertura negativa dos guards de cause/code: sem esses testes, uma regressao que
+  // aceitasse cause nao-objeto ou code nao reconhecido passaria despercebida.
+  it('cause presente mas nao-objeto (string/number) NAO conta como timeout', () => {
+    expect(isTimeoutError(Object.assign(new Error('x'), { cause: 'boom' }))).toBe(false);
+    expect(isTimeoutError(Object.assign(new Error('x'), { cause: 42 }))).toBe(false);
+  });
+  it('cause={} sem name/code NAO conta como timeout', () => {
+    expect(isTimeoutError(Object.assign(new Error('x'), { cause: {} }))).toBe(false);
+  });
+  it('err.code com valor nao reconhecido (ex: ECONNRESET) NAO conta como timeout', () => {
+    expect(isTimeoutError(Object.assign(new Error('x'), { code: 'ECONNRESET' }))).toBe(false);
+    expect(isTimeoutError(Object.assign(new Error('x'), { code: 'ENOTFOUND' }))).toBe(false);
   });
 });
 

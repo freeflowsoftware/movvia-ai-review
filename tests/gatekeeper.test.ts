@@ -367,14 +367,55 @@ describe('refuteByPresence (guard determinístico, sem LLM)', () => {
     expect(kept).toEqual([]);
   });
 
-  it('suprime "componente nao renderizado/implementado" quando o componente existe (SEO-153)', () => {
+  it('suprime "componente nao implementado" (existência estrita) quando o componente existe', () => {
     const finding = f({
       severity: 'P1', file: 'app/_rota-verde/rota-verde-detalhe.tsx',
       title: 'Componente RvHero nao esta implementado',
-      rationale: 'O componente `RvHero` nao foi encontrado / nao e renderizado.',
+      rationale: 'O componente `RvHero` nao foi encontrado.',
     });
     const { kept } = refuteByPresence([finding], index);
     expect(kept).toEqual([]);
+  });
+
+  // Regressão SEO-153 / gap apontado no review manual: um componente PODE existir no repo
+  // e ainda assim não ser renderizado no fluxo citado. Isso é AUSÊNCIA COMPORTAMENTAL — não
+  // pode ser suprimida por presença global do símbolo. Antes o padrão "renderizad" caía em
+  // EXISTENCE_ABSENCE e o guard suprimia esse tipo de finding indevidamente.
+  it('PRESERVA "componente X nao e renderizado" mesmo com o simbolo no indice (comportamental)', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/_rota-verde/rota-verde-detalhe.tsx',
+      title: 'Hero RvHero nao e renderizado na pagina',
+      rationale: 'O componente `RvHero` existe mas nao e renderizado no fluxo de detalhe.',
+    });
+    const { kept, suppressed } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it('PRESERVA "does not render" (EN) mesmo com o simbolo no indice (comportamental)', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/page.tsx',
+      title: 'Page does not render RvHero',
+      rationale: 'Layout does not render `RvHero` — component defined but never mounted.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+  });
+
+  // Regressao adversarial: reproduz o texto SEO-153 original combinado. Existe uma claim
+  // de existencia ("nao foi encontrado" bate EXISTENCE_ABSENCE) E uma claim comportamental
+  // ("nao e renderizado", sem acento como PT-BR de LLM sem locale). O guard checa
+  // BEHAVIORAL primeiro; se a regex nao aceitar "e" desacentuado, o texto cai em
+  // EXISTENCE_ABSENCE e RvHero (no indice) suprime o finding indevidamente.
+  it('PRESERVA texto combinado "nao foi encontrado / nao e renderizado" (sem acento, SEO-153 real)', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/_rota-verde/rota-verde-detalhe.tsx',
+      title: 'Componente RvHero nao esta implementado no fluxo',
+      rationale: 'O componente `RvHero` nao foi encontrado / nao e renderizado no template de detalhe.',
+    });
+    const { kept, suppressed } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+    expect(suppressed).toEqual([]);
   });
 
   it('PRESERVA ausencia comportamental P0 mesmo com o simbolo no indice (recall)', () => {

@@ -126,7 +126,9 @@ export const realChatRunner: ChatRunner = async (model, system, user) => {
   // fetch nativo do Node 22; nao dependemos mais do binario opencode no PATH.
   const timeoutMs = llmTimeoutMs();
   // retryOnTimeout: uma tentativa extra se o endpoint pendurar (TimeoutError do AbortSignal).
-  // A mensagem "timeout" e reconhecida por isTimeoutError, entao o retry so vale para timeout.
+  // isTimeoutError classifica por tipo/codigo estruturado (err.name / err.cause?.name /
+  // err.code de undici) — nao mais por texto de mensagem. Erro de contrato (HTTP 4xx/5xx)
+  // propaga na hora, sem retry, mesmo que contenha "timeout" no body.
   return retryOnTimeout(async () => {
     let res: Response;
     try {
@@ -150,8 +152,15 @@ export const realChatRunner: ChatRunner = async (model, system, user) => {
       });
     } catch (err) {
       // TimeoutError/AbortError do AbortSignal.timeout viram mensagem legivel (retryavel).
-      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-        throw new Error(`chat-completion timeout apos ${timeoutMs}ms`);
+      // Preserva `.name` E `.cause` para isTimeoutError classificar por tipo (não por texto):
+      // sem isso o retry legitimo de timeout se perderia apos remover a heuristica textual.
+      // hasTimeoutName é fonte única da lista de names de timeout (evita drift entre
+      // aqui e isTimeoutError). Error.cause é nativo desde ES2022 (sem cast).
+      if (err instanceof Error && hasTimeoutName(err.name)) {
+        const wrapped = new Error(`chat-completion timeout apos ${timeoutMs}ms`);
+        wrapped.name = err.name;
+        wrapped.cause = err;
+        throw wrapped;
       }
       throw err;
     }
@@ -175,12 +184,40 @@ export async function runAgent(
   return { agent: spec.name, findings: parseFindings(raw, spec.name) };
 }
 
-/** True se o erro é timeout/abort transitório (rede/endpoint pendurado), não um erro de contrato. */
+// Codes de timeout de undici (fetch nativo do Node) que classificam a falha como transitória
+// sem depender do texto da mensagem — TimeoutError/AbortError já cobrem AbortSignal.timeout(),
+// undici lança TypeError('fetch failed') e coloca o motivo real em err.cause.
+const UNDICI_TIMEOUT_CODES = new Set([
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+function hasTimeoutName(name: unknown): boolean {
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
+function hasTimeoutCode(code: unknown): boolean {
+  return typeof code === 'string' && UNDICI_TIMEOUT_CODES.has(code);
+}
+
+/**
+ * True se o erro é timeout/abort transitório (rede/endpoint pendurado), não um erro de contrato.
+ * Classifica APENAS por tipo/código estruturado: err.name, err.cause?.name, err.cause?.code.
+ * Sem heurística textual: um HTTP 504 ou "invalid timeout param" contém "timeout" no message
+ * mas é erro de contrato (não deve repetir POST não-idempotente). Custo do falso-negativo é
+ * uma leg degradada; do falso-positivo é POST duplicado — assimetria pró-precisão.
+ */
 export function isTimeoutError(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    (err.name === 'TimeoutError' || err.name === 'AbortError' || /timeout/i.test(err.message))
-  );
+  if (!(err instanceof Error)) return false;
+  if (hasTimeoutName(err.name)) return true;
+  // Error.cause é nativo ES2022; err.code não faz parte do tipo Error padrão (undici add-on).
+  if (err.cause && typeof err.cause === 'object') {
+    const c = err.cause as { name?: unknown; code?: unknown };
+    if (hasTimeoutName(c.name) || hasTimeoutCode(c.code)) return true;
+  }
+  return hasTimeoutCode((err as { code?: unknown }).code);
 }
 
 /**
