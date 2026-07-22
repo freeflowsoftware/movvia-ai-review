@@ -52,6 +52,17 @@ describe('parseAddedLines', () => {
   });
 });
 
+// Regressao (CodeRabbit PR#13): uma remocao "-- x" e serializada como "--- x" e uma adicao
+// "++ b/y" como "+++ b/y". DENTRO do hunk sao conteudo real e nao podem ser descartados como
+// header, senao o arbitro perde justamente o delta que precisa ver.
+const DIFF_CONTEUDO_PARECE_HEADER = `diff --git a/src/d.ts b/src/d.ts
+--- a/src/d.ts
++++ b/src/d.ts
+@@ -1,2 +1,2 @@
+--- rodape antigo
++++ b/rodape novo
+`;
+
 describe('parseCite', () => {
   it('parseia "file:start-end"', () => {
     expect(parseCite('src/a.ts:11-12')).toEqual({ file: 'src/a.ts', start: 11, end: 12 });
@@ -106,6 +117,12 @@ describe('diffForFile', () => {
 
   it('retorna vazio quando o arquivo nao esta no diff', () => {
     expect(diffForFile(DIFF, 'src/inexistente.ts')).toBe('');
+  });
+
+  it('preserva conteudo do hunk que parece header ("--- x" removido, "+++ b/y" adicionado)', () => {
+    const out = diffForFile(DIFF_CONTEUDO_PARECE_HEADER, 'src/d.ts');
+    expect(out).toContain('--- rodape antigo'); // remocao "-- rodape antigo" nao vira header
+    expect(out).toContain('+++ b/rodape novo'); // adicao "++ b/rodape novo" nao vira header
   });
 });
 

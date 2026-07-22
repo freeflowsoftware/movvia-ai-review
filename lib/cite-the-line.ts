@@ -67,11 +67,15 @@ export function indexDiffByFile(diff: string): Map<string, string> {
   const byFile = new Map<string, string>();
   let file = '';
   let hunks: string[] = [];
+  let inHunk = false; // `--- `/`+++ b/` so sao header ANTES do 1o @@; dentro do hunk sao conteudo
   const flush = (): void => { if (file) byFile.set(file, hunks.join('\n').trim()); };
   for (const raw of diff.split('\n')) {
-    if (raw.startsWith('diff --git ')) { flush(); file = ''; hunks = []; continue; } // novo arquivo
-    if (raw.startsWith('--- ')) continue;                                            // header versao antiga
-    if (raw.startsWith('+++ b/')) { flush(); file = raw.slice(6).trim(); hunks = []; continue; }
+    if (raw.startsWith('diff --git ')) { flush(); file = ''; hunks = []; inHunk = false; continue; } // novo arquivo
+    if (!inHunk && raw.startsWith('--- ')) continue;                                                 // header versao antiga
+    if (!inHunk && raw.startsWith('+++ b/')) { flush(); file = raw.slice(6).trim(); hunks = []; continue; }
+    // Uma remocao "-- x" vira "--- x" e uma adicao "++ b/y" vira "+++ b/y"; dentro do hunk
+    // sao conteudo real e nao podem ser descartados como header (senao o arbitro perde o delta).
+    if (file && raw.startsWith('@@')) inHunk = true;
     if (file) hunks.push(raw); // linhas @@ + conteudo (+/-/contexto) do arquivo corrente
   }
   flush();
