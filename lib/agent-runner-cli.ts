@@ -3,7 +3,11 @@ import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
-import { runAgentSafe, realChatRunner } from './run-agent.js';
+// Combina retry (PED-2729: withRetry envelopa o runner para retentar erros transitorios com
+// backoff+jitter) e degradacao graciosa (PED-2765: runAgentSafe engole erros terminais e
+// devolve findings vazio + degraded=true em vez de derrubar a leg da matrix e, via needs:,
+// bloquear gatekeeper/post). Retry primeiro, safe depois — o veredicto sempre e publicado.
+import { runAgentSafe, realChatRunner, withRetry } from './run-agent.js';
 import { loadOrgRules } from './org-rules.js';
 import { ADR_GLOBS } from './adr.js';
 import { EMPTY_PRESENCE_INDEX } from './context-pack.js';
@@ -172,8 +176,18 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // configuravel por DEFAULT_MODEL. Id PURO do OpenRouter (sem prefixo 'llm/' do opencode):
   // a chat-completion direta roteia pelo id do modelo, nao pelo provider customizado.
   const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'google/gemini-2.5-flash-lite';
-  // runAgentSafe (não runAgent): um timeout do LLM degrada esta dimensão para findings vazio
-  // em vez de sair !=0 e, via needs:, bloquear gatekeeper/post — o veredicto sempre é publicado.
-  const res = await runAgentSafe(spec, system, user, model, realChatRunner);
+  // Retry (PED-2729) COMPOSTO com degradacao graciosa (PED-2765): withRetry envelopa o
+  // runner para retentar erros transitorios com backoff+jitter; se esgotar as tentativas
+  // OU se o parse falhar, runAgentSafe engole o erro terminal e devolve findings vazio +
+  // degraded=true — a leg da matrix nunca sai !=0, o gatekeeper/post rodam, o veredicto
+  // sempre e publicado com transparencia sobre as dimensoes degradadas.
+  // stdout deste processo e redirecionado para o JSON de findings do workflow (ver step
+  // "Rodar agente" no ai-review.yml), entao o log de retry vai OBRIGATORIAMENTE para
+  // stderr (console.error) — nunca stdout, ou corrompe o JSON consumido pelo gatekeeper.
+  const runner = withRetry(realChatRunner, {
+    onRetry: ({ attempt, delayMs, err }) =>
+      console.error(`[${name}] tentativa ${attempt} do LLM falhou (${(err as Error).message}); re-tentando em ${delayMs}ms`),
+  });
+  const res = await runAgentSafe(spec, system, user, model, runner);
   process.stdout.write(JSON.stringify(res));
 }

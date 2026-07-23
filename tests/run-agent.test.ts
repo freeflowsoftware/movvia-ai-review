@@ -1,6 +1,6 @@
 // tests/run-agent.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseFindings, runAgent, runAgentSafe, retryOnTimeout, isTimeoutError, llmTimeoutMs, realChatRunner, type ChatRunner } from '../lib/run-agent.js';
+import { parseFindings, runAgent, runAgentSafe, llmTimeoutMs, realChatRunner, LlmError, type ChatRunner } from '../lib/run-agent.js';
 import type { AgentSpec } from '../lib/types.js';
 
 const SPEC: AgentSpec = {
@@ -93,49 +93,20 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
   const origFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = origFetch; });
 
-  it('traduz TimeoutError/AbortError em mensagem legível com o timeout', async () => {
+  it('traduz TimeoutError/AbortError em LlmError transient com mensagem legível', async () => {
     globalThis.fetch = (async () => {
       throw Object.assign(new Error('aborted'), { name: 'TimeoutError' });
     }) as typeof fetch;
+    // PED-2729: timeout vira LlmError com transient=true (classificado pra retry por isTransientLlmError).
     await expect(realChatRunner('m', 's', 'u')).rejects.toThrow(/timeout apos \d+ms/);
-  });
-
-  // Regressao critica: o wrapper de timeout DEVE preservar err.name E err.cause. Sem isso,
-  // isTimeoutError (que agora classifica por tipo estruturado, sem heuristica textual) nao
-  // reconhece o erro embrulhado, retryOnTimeout nao retria, e o retry legitimo se perde
-  // silenciosamente. Antes desta cobertura, remover as duas linhas de preservacao mantinha
-  // todos os testes verdes — invariante critico sem guard.
-  it('preserva err.name=TimeoutError E err.cause no timeout embrulhado (retry funciona)', async () => {
-    let fetchCalls = 0;
-    const original = Object.assign(new Error('aborted'), { name: 'TimeoutError' });
+    // Segundo throw pra validar o tipo (rejects.toThrow acima ja consumiu a promise).
     globalThis.fetch = (async () => {
-      fetchCalls++;
-      throw original;
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }) as typeof fetch;
     let captured: unknown;
-    try {
-      await realChatRunner('m', 's', 'u');
-    } catch (e) {
-      captured = e;
-    }
-    expect(captured).toBeInstanceOf(Error);
-    const err = captured as Error;
-    expect(err.name).toBe('TimeoutError');
-    expect(err.cause).toBe(original);
-    // retryOnTimeout(attempts=2): TimeoutError classificado corretamente => 2 chamadas de fetch.
-    expect(fetchCalls).toBe(2);
-  });
-
-  it('preserva AbortError tambem (nao so TimeoutError)', async () => {
-    const original = Object.assign(new Error('aborted'), { name: 'AbortError' });
-    globalThis.fetch = (async () => { throw original; }) as typeof fetch;
-    let captured: unknown;
-    try {
-      await realChatRunner('m', 's', 'u');
-    } catch (e) { captured = e; }
-    const err = captured as Error;
-    expect(err.name).toBe('AbortError');
-    expect(err.cause).toBe(original);
+    try { await realChatRunner('m', 's', 'u'); } catch (e) { captured = e; }
+    expect(captured).toBeInstanceOf(LlmError);
+    expect((captured as LlmError).transient).toBe(true);
   });
 
   it('propaga erro não-timeout intacto (não mascara como timeout)', async () => {
@@ -155,79 +126,9 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
   });
 });
 
-describe('isTimeoutError', () => {
-  it('reconhece TimeoutError/AbortError por name', () => {
-    const to = new Error('x'); to.name = 'TimeoutError';
-    const ab = new Error('x'); ab.name = 'AbortError';
-    expect(isTimeoutError(to)).toBe(true);
-    expect(isTimeoutError(ab)).toBe(true);
-  });
-  it('reconhece timeout via err.cause.name (undici embrulha em TypeError)', () => {
-    const inner = new Error('inner'); inner.name = 'TimeoutError';
-    const outer = new TypeError('fetch failed');
-    outer.cause = inner;
-    expect(isTimeoutError(outer)).toBe(true);
-  });
-  it('reconhece codigos de timeout de undici (HEADERS/BODY/CONNECT)', () => {
-    // .code é add-on de undici — não parte do tipo Error padrão; cast é intencional aqui.
-    const err = Object.assign(new Error('boom'), { code: 'UND_ERR_HEADERS_TIMEOUT' });
-    expect(isTimeoutError(err)).toBe(true);
-    const wrapped = new TypeError('fetch failed');
-    wrapped.cause = { code: 'UND_ERR_BODY_TIMEOUT' };
-    expect(isTimeoutError(wrapped)).toBe(true);
-  });
-  // Regressao critica: heuristica textual era FONTE DE POST DUPLICADO.
-  // HTTP 504 ou "invalid timeout param" (contrato) contem "timeout" mas NAO deve repetir.
-  it('NAO trata erros de contrato com "timeout" no texto como timeout (evita POST duplicado)', () => {
-    expect(isTimeoutError(new Error('HTTP 504 — Gateway Timeout'))).toBe(false);
-    expect(isTimeoutError(new Error('HTTP 422 — invalid timeout parameter'))).toBe(false);
-    expect(isTimeoutError(new Error('chat-completion timeout apos 60000ms'))).toBe(false);
-  });
-  it('nao trata erros comuns como timeout', () => {
-    expect(isTimeoutError(new Error('HTTP 500'))).toBe(false);
-    expect(isTimeoutError('string')).toBe(false);
-    expect(isTimeoutError(null)).toBe(false);
-    expect(isTimeoutError({ name: 'TimeoutError' })).toBe(false); // nao e Error real
-  });
-  // Cobertura negativa dos guards de cause/code: sem esses testes, uma regressao que
-  // aceitasse cause nao-objeto ou code nao reconhecido passaria despercebida.
-  it('cause presente mas nao-objeto (string/number) NAO conta como timeout', () => {
-    expect(isTimeoutError(Object.assign(new Error('x'), { cause: 'boom' }))).toBe(false);
-    expect(isTimeoutError(Object.assign(new Error('x'), { cause: 42 }))).toBe(false);
-  });
-  it('cause={} sem name/code NAO conta como timeout', () => {
-    expect(isTimeoutError(Object.assign(new Error('x'), { cause: {} }))).toBe(false);
-  });
-  it('err.code com valor nao reconhecido (ex: ECONNRESET) NAO conta como timeout', () => {
-    expect(isTimeoutError(Object.assign(new Error('x'), { code: 'ECONNRESET' }))).toBe(false);
-    expect(isTimeoutError(Object.assign(new Error('x'), { code: 'ENOTFOUND' }))).toBe(false);
-  });
-});
-
-describe('retryOnTimeout', () => {
-  it('reexecuta UMA vez extra apos timeout e entao devolve o sucesso', async () => {
-    let calls = 0;
-    const fn = async () => {
-      calls++;
-      if (calls === 1) { const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; }
-      return 'ok';
-    };
-    expect(await retryOnTimeout(fn, 2)).toBe('ok');
-    expect(calls).toBe(2);
-  });
-  it('NAO reexecuta erro que nao e timeout (propaga na hora)', async () => {
-    let calls = 0;
-    const fn = async () => { calls++; throw new Error('HTTP 422'); };
-    await expect(retryOnTimeout(fn, 2)).rejects.toThrow('HTTP 422');
-    expect(calls).toBe(1);
-  });
-  it('esgota as tentativas e propaga o ultimo timeout', async () => {
-    let calls = 0;
-    const fn = async () => { calls++; const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; };
-    await expect(retryOnTimeout(fn, 2)).rejects.toThrow('timeout');
-    expect(calls).toBe(2);
-  });
-});
+// Classificação de erro transitório e retry com backoff moraram em `isTransientLlmError`/
+// `withRetry` (PED-2729) na main — cobertura em tests/retry-runner.test.ts. O que era do
+// meu `isTimeoutError`/`retryOnTimeout` ficou subsumido e foi removido.
 
 describe('runAgentSafe', () => {
   it('delega ao runAgent no caminho feliz', async () => {

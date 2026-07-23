@@ -122,56 +122,144 @@ export function llmTimeoutMs(): number {
   return Math.min(raw, MAX_LLM_TIMEOUT_MS);
 }
 
+/**
+ * PED-2729: erro tipado da borda LLM. `transient` marca se vale a pena tentar de novo
+ * (timeout, 429, 5xx, erro de rede) — status 4xx de negocio (400 model invalido, etc.)
+ * fica `transient: false` para nao desperdicar retries em erro que nunca vai se resolver
+ * sozinho. `status` e opcional pois timeouts/erros de rede nao tem HTTP status.
+ */
+export class LlmError extends Error {
+  readonly status?: number;
+  readonly transient: boolean;
+  constructor(message: string, opts: { status?: number; transient: boolean }) {
+    super(message);
+    this.name = 'LlmError';
+    this.status = opts.status;
+    this.transient = opts.transient;
+  }
+}
+
 export const realChatRunner: ChatRunner = async (model, system, user) => {
   // fetch nativo do Node 22; nao dependemos mais do binario opencode no PATH.
   const timeoutMs = llmTimeoutMs();
-  // retryOnTimeout: uma tentativa extra se o endpoint pendurar (TimeoutError do AbortSignal).
-  // isTimeoutError classifica por tipo/codigo estruturado (err.name / err.cause?.name /
-  // err.code de undici) — nao mais por texto de mensagem. Erro de contrato (HTTP 4xx/5xx)
-  // propaga na hora, sem retry, mesmo que contenha "timeout" no body.
-  return retryOnTimeout(async () => {
-    let res: Response;
-    try {
-      res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: stripOpencodeProviderPrefix(model),
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-          // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
-          temperature: 0.1,
-        }),
-        // AbortSignal.timeout nativo do Node 22; aborta o fetch pendurado.
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (err) {
-      // TimeoutError/AbortError do AbortSignal.timeout viram mensagem legivel (retryavel).
-      // Preserva `.name` E `.cause` para isTimeoutError classificar por tipo (não por texto):
-      // sem isso o retry legitimo de timeout se perderia apos remover a heuristica textual.
-      // hasTimeoutName é fonte única da lista de names de timeout (evita drift entre
-      // aqui e isTimeoutError). Error.cause é nativo desde ES2022 (sem cast).
-      if (err instanceof Error && hasTimeoutName(err.name)) {
-        const wrapped = new Error(`chat-completion timeout apos ${timeoutMs}ms`);
-        wrapped.name = err.name;
-        wrapped.cause = err;
-        throw wrapped;
-      }
-      throw err;
+  let res: Response;
+  try {
+    res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: stripOpencodeProviderPrefix(model),
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        // Temperatura baixa: review e tarefa de extracao deterministica, nao criativa.
+        temperature: 0.1,
+      }),
+      // AbortSignal.timeout nativo do Node 22; aborta o fetch pendurado.
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    // TimeoutError/AbortError do AbortSignal.timeout viram mensagem legivel.
+    // PED-2729: timeout e sempre transitorio (o endpoint so pendurou desta vez).
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new LlmError(`chat-completion timeout apos ${timeoutMs}ms`, { transient: true });
     }
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`chat-completion falhou: HTTP ${res.status} — ${body}`);
-    }
-    const data = (await res.json()) as ChatCompletionResponse;
-    return data.choices?.[0]?.message?.content ?? '';
-  });
+    // Erro de rede (ECONNRESET etc.) nao vira LlmError: mantido intacto para o classificador
+    // isTransientLlmError tratar via fallback (nao-Error => nao-transiente; Error => transiente).
+    throw err;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    // PED-2729: 429 (rate limit), 408 (request timeout), 425 (too early) e 5xx (erro do
+    // provedor) sao transitorios; demais 4xx de negocio (400 model invalido, 401/403 auth)
+    // nao sao — retry nao resolve credencial errada.
+    const transient = res.status === 429 || res.status === 408 || res.status === 425 || res.status >= 500;
+    throw new LlmError(`chat-completion falhou: HTTP ${res.status} — ${body}`, { status: res.status, transient });
+  }
+  const data = (await res.json()) as ChatCompletionResponse;
+  return data.choices?.[0]?.message?.content ?? '';
 };
+
+/** Verdadeiro se `err` indica falha transitoria da LLM, digna de retry. */
+export function isTransientLlmError(err: unknown): boolean {
+  if (err instanceof LlmError) return err.transient;
+  if (!(err instanceof Error)) return false;
+  // Erro de configuracao (modelo inexistente/invalido) nunca se resolve com retry.
+  if (/invalid model|model .*not found|unknown model/i.test(err.message)) return false;
+  return true;
+}
+
+/**
+ * Converte env var para inteiro valido, com clamp — mesma convencao de llmTimeoutMs.
+ * PED-2729: undefined/vazio/whitespace cai no default ANTES do Number() — sem essa guarda,
+ * Number("") === 0 faria AGENT_MAX_ATTEMPTS="" virar 0 e ser clampado para o piso (1),
+ * desligando o retry na pratica em vez de usar o default.
+ */
+function clampInt(raw: string | undefined, def: number, lo: number, hi: number): number {
+  if (raw === undefined || raw.trim() === '') return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return def;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+export function retryConfigFromEnv(): { maxAttempts: number; baseMs: number } {
+  return {
+    maxAttempts: clampInt(process.env.AGENT_MAX_ATTEMPTS, 3, 1, 5),
+    baseMs: clampInt(process.env.AGENT_RETRY_BASE_MS, 500, 0, 30_000),
+  };
+}
+
+/** Abstrai `setTimeout`-based sleep para os testes injetarem um fake sem esperar de verdade. */
+export type Sleeper = (ms: number) => Promise<void>;
+const realSleep: Sleeper = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export interface RetryOptions {
+  maxAttempts: number;
+  baseMs: number;
+  sleep: Sleeper;
+  isTransient: (err: unknown) => boolean;
+  onRetry?: (info: { attempt: number; delayMs: number; err: unknown }) => void;
+  /** Injetavel para testes deterministicos; default `Math.random`. */
+  random?: () => number;
+}
+
+/**
+ * PED-2729: envolve um ChatRunner com retry de backoff exponencial para erro transitorio.
+ * Wrapper (nao mudanca de assinatura) para nao quebrar runAgent/gatekeeper/judge/verify/
+ * walkthrough, que continuam recebendo um ChatRunner comum — a logica de retry fica
+ * transparente para quem chama.
+ *
+ * Equal jitter no delay: os agentes rodam em matrix paralela compartilhando a mesma API
+ * key/rate-limit, entao num 429 todos calculariam o mesmo delay exponencial e re-tentariam
+ * em sincronia (thundering herd). Equal jitter mantem metade do delay fixo (garante backoff
+ * minimo) e sorteia a outra metade, desincronizando os agentes. `random` e injetavel para os
+ * testes permanecerem deterministicos.
+ */
+export function withRetry(inner: ChatRunner, opts: Partial<RetryOptions> = {}): ChatRunner {
+  const cfg = retryConfigFromEnv();
+  const maxAttempts = opts.maxAttempts ?? cfg.maxAttempts;
+  const baseMs = opts.baseMs ?? cfg.baseMs;
+  const sleep = opts.sleep ?? realSleep;
+  const isTransient = opts.isTransient ?? isTransientLlmError;
+  const random = opts.random ?? Math.random;
+  return async (model, system, user) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await inner(model, system, user);
+      } catch (err) {
+        if (!isTransient(err) || attempt >= maxAttempts) throw err;
+        const cap = baseMs * 2 ** (attempt - 1);
+        const delayMs = Math.round(cap / 2 + random() * (cap / 2));
+        opts.onRetry?.({ attempt, delayMs, err });
+        await sleep(delayMs);
+      }
+    }
+  };
+}
 
 export async function runAgent(
   spec: AgentSpec,
@@ -182,60 +270,6 @@ export async function runAgent(
 ): Promise<AgentResult> {
   const raw = await runner(model, system, user);
   return { agent: spec.name, findings: parseFindings(raw, spec.name) };
-}
-
-// Codes de timeout de undici (fetch nativo do Node) que classificam a falha como transitória
-// sem depender do texto da mensagem — TimeoutError/AbortError já cobrem AbortSignal.timeout(),
-// undici lança TypeError('fetch failed') e coloca o motivo real em err.cause.
-const UNDICI_TIMEOUT_CODES = new Set([
-  'UND_ERR_HEADERS_TIMEOUT',
-  'UND_ERR_BODY_TIMEOUT',
-  'UND_ERR_CONNECT_TIMEOUT',
-  'UND_ERR_SOCKET',
-]);
-
-function hasTimeoutName(name: unknown): boolean {
-  return name === 'TimeoutError' || name === 'AbortError';
-}
-
-function hasTimeoutCode(code: unknown): boolean {
-  return typeof code === 'string' && UNDICI_TIMEOUT_CODES.has(code);
-}
-
-/**
- * True se o erro é timeout/abort transitório (rede/endpoint pendurado), não um erro de contrato.
- * Classifica APENAS por tipo/código estruturado: err.name, err.cause?.name, err.cause?.code.
- * Sem heurística textual: um HTTP 504 ou "invalid timeout param" contém "timeout" no message
- * mas é erro de contrato (não deve repetir POST não-idempotente). Custo do falso-negativo é
- * uma leg degradada; do falso-positivo é POST duplicado — assimetria pró-precisão.
- */
-export function isTimeoutError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  if (hasTimeoutName(err.name)) return true;
-  // Error.cause é nativo ES2022; err.code não faz parte do tipo Error padrão (undici add-on).
-  if (err.cause && typeof err.cause === 'object') {
-    const c = err.cause as { name?: unknown; code?: unknown };
-    if (hasTimeoutName(c.name) || hasTimeoutCode(c.code)) return true;
-  }
-  return hasTimeoutCode((err as { code?: unknown }).code);
-}
-
-/**
- * Reexecuta `fn` uma tentativa extra APENAS em timeout/abort transitório (endpoint LLM
- * pendurado). Erros de contrato (HTTP 4xx/5xx, parse) propagam na hora — não faz sentido
- * repetir. Custo de token só no raro retry; corta o loop "timeout → sem veredicto → rerun".
- */
-export async function retryOnTimeout<T>(fn: () => Promise<T>, attempts = 2): Promise<T> {
-  let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (!isTimeoutError(err) || i === attempts - 1) throw err;
-    }
-  }
-  throw lastErr;
 }
 
 /**
