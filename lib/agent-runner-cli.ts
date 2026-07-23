@@ -3,10 +3,15 @@ import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { parseAgentFile } from './discover.js';
 import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths } from './context-loader.js';
-import { runAgent, realChatRunner, withRetry } from './run-agent.js';
+// Combina retry (PED-2729: withRetry envelopa o runner para retentar erros transitorios com
+// backoff+jitter) e degradacao graciosa (PED-2765: runAgentSafe engole erros terminais e
+// devolve findings vazio + degraded=true em vez de derrubar a leg da matrix e, via needs:,
+// bloquear gatekeeper/post). Retry primeiro, safe depois — o veredicto sempre e publicado.
+import { runAgentSafe, realChatRunner, withRetry } from './run-agent.js';
 import { loadOrgRules } from './org-rules.js';
 import { ADR_GLOBS } from './adr.js';
-import type { ContextPack, FileContextLayers, PackFile } from './context-pack.js';
+import { EMPTY_PRESENCE_INDEX } from './context-pack.js';
+import type { ContextPack, FileContextLayers, PackFile, PresenceIndex } from './context-pack.js';
 import {
   extractJiraKey,
   fetchJiraTicket,
@@ -97,6 +102,21 @@ export function loadContextPack(packPath: string, changedFiles: string[]): strin
 }
 
 /**
+ * Lê o presenceIndex do artefato context-pack (metadado, NUNCA renderizado em prompt —
+ * consumido só pelo guard determinístico do gatekeeper). DEGRADAÇÃO GRACIOSA: sem pack ou
+ * JSON corrompido => índice vazio (o guard nunca suprime por índice vazio → sem falso-negativo).
+ */
+export function loadPresenceIndex(packPath: string): PresenceIndex {
+  if (!packPath || !existsSync(packPath)) return EMPTY_PRESENCE_INDEX;
+  try {
+    const pack = JSON.parse(readFileSync(packPath, 'utf8')) as ContextPack;
+    return pack.presenceIndex ?? EMPTY_PRESENCE_INDEX;
+  } catch {
+    return EMPTY_PRESENCE_INDEX;
+  }
+}
+
+/**
  * Resolve a chave Jira do PR: JIRA_KEY explicito tem prioridade; senao extrai do PR_TITLE.
  * Early return quando nada casa para nao chamar a Jira a toa nos repos sem ticket no titulo.
  */
@@ -156,13 +176,18 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   // configuravel por DEFAULT_MODEL. Id PURO do OpenRouter (sem prefixo 'llm/' do opencode):
   // a chat-completion direta roteia pelo id do modelo, nao pelo provider customizado.
   const model = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'google/gemini-2.5-flash-lite';
-  // PED-2729: agent-runner-cli.ts redireciona stdout para o JSON de findings do workflow
-  // (ver step "Rodar agente" no ai-review.yml), entao o log de retry vai OBRIGATORIAMENTE
-  // para stderr (console.error) — nunca stdout, ou corrompe o JSON consumido pelo gatekeeper.
+  // Retry (PED-2729) COMPOSTO com degradacao graciosa (PED-2765): withRetry envelopa o
+  // runner para retentar erros transitorios com backoff+jitter; se esgotar as tentativas
+  // OU se o parse falhar, runAgentSafe engole o erro terminal e devolve findings vazio +
+  // degraded=true — a leg da matrix nunca sai !=0, o gatekeeper/post rodam, o veredicto
+  // sempre e publicado com transparencia sobre as dimensoes degradadas.
+  // stdout deste processo e redirecionado para o JSON de findings do workflow (ver step
+  // "Rodar agente" no ai-review.yml), entao o log de retry vai OBRIGATORIAMENTE para
+  // stderr (console.error) — nunca stdout, ou corrompe o JSON consumido pelo gatekeeper.
   const runner = withRetry(realChatRunner, {
     onRetry: ({ attempt, delayMs, err }) =>
       console.error(`[${name}] tentativa ${attempt} do LLM falhou (${(err as Error).message}); re-tentando em ${delayMs}ms`),
   });
-  const res = await runAgent(spec, system, user, model, runner);
+  const res = await runAgentSafe(spec, system, user, model, runner);
   process.stdout.write(JSON.stringify(res));
 }

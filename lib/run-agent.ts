@@ -271,3 +271,25 @@ export async function runAgent(
   const raw = await runner(model, system, user);
   return { agent: spec.name, findings: parseFindings(raw, spec.name) };
 }
+
+/**
+ * runAgent tolerante a falha: em erro (timeout após retry, parse, rede) degrada para findings
+ * vazio + `degraded:true` em vez de LANÇAR. Antes, um único reviewer que dava timeout derrubava
+ * a matrix leg e, por needs:, os jobs gatekeeper/post — o PR ficava SEM veredicto e o dev
+ * disparava reruns que geravam findings novos/contraditórios (não-determinância relatada).
+ * Agora a leg sempre sai 0; o veredicto é sempre publicado e a dimensão degradada é reportada.
+ */
+export async function runAgentSafe(
+  spec: AgentSpec,
+  system: string,
+  user: string,
+  model: string,
+  runner: ChatRunner,
+): Promise<AgentResult> {
+  try {
+    return await runAgent(spec, system, user, model, runner);
+  } catch (err) {
+    process.stderr.write(`[runAgentSafe] agente ${spec.name} degradou: ${String(err)}\n`);
+    return { agent: spec.name, findings: [], degraded: true };
+  }
+}

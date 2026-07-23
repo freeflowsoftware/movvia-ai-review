@@ -120,6 +120,30 @@ model Pedido {
 }
 ```
 
+## CHECK constraints: NAO reportar ausencia no schema.prisma (anti-falso-positivo)
+
+**O `schema.prisma` NAO expressa CHECK constraints.** O Prisma nao tem sintaxe para
+`CHECK (status IN (...))`; o DDL do banco (incluindo CHECKs, triggers, indices parciais)
+vive no repo **separado `pe-migrations`** (Flyway, fonte de verdade do DDL). O `schema.prisma`
+apenas espelha as tabelas para o Prisma Client.
+
+Portanto, ao revisar um `schema.prisma`:
+
+- **NAO reporte "falta CHECK constraint" / "campo status sem validacao no banco"** contra o
+  `.prisma`. A CHECK provavelmente JA existe na migration correspondente do `pe-migrations`
+  (que NAO esta no diff deste repo). Ausencia de CHECK no `.prisma` e **esperada**, nao um defeito.
+- O padrao correto no `.prisma` e `String @db.VarChar(N) // VALOR1, VALOR2, ...` — a integridade
+  a nivel de banco fica na migration Flyway; a validacao a nivel de app fica no DTO/constantes.
+- So reporte se a evidencia estiver NO DIFF (ex.: uma migration `.sql` no diff criando a coluna
+  sem CHECK). Nao infira ausencia de algo que mora em outro repositorio.
+
+```prisma
+// ✅ CORRETO no .prisma — a CHECK vive em pe-migrations/Vxxx__....sql, NAO aqui
+model ConsultaAlertaEmail {
+  status String @db.VarChar(20) // ATIVO, OPT_OUT, CANCELADO — CHECK na migration Flyway
+}
+```
+
 ## Referencia
 
 Alinhado com `flyway-migrations.md` para consistencia entre Prisma e Flyway.

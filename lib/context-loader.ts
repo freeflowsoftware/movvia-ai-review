@@ -116,6 +116,10 @@ export function buildSystemPrompt(spec: AgentSpec): string {
     '- Se o codigo alterado JA resolve/cobre o ponto, NAO reporte: ex. o PR inclui o arquivo de teste (*.spec.ts/*Test.java) que cobre o codigo; o campo ja tem os decorators de validacao; o lock/idempotencia ja esta presente.',
     '- Severidade: P0 = bug certo / vulnerabilidade / quebra. P1 = problema real, acionavel, de impacto claro E do qual voce tem CERTEZA. P2 = melhoria, estilo, nitpick, ou qualquer coisa incerta/discutivel.',
     '- NA DUVIDA sobre se um problema EXISTE, use P2 ou NAO reporte. So use P0/P1 quando um engenheiro senior concordaria que aquilo BLOQUEIA o merge. Um P0/P1 falso-positivo custa caro.',
+    // Intencao documentada (anti-falso-positivo PR69): comportamento explicado como
+    // decidido no codigo/ADR nao e defeito; flag de rollout desligada e intencional.
+    '- INTENCAO documentada nao e bug: se um docstring/comentario ou ADR explica um comportamento como INTENCIONAL/decidido (ex: "X nao e feito porque Y", "best-effort local-only"), NAO reporte esse comportamento como defeito.',
+    '- Flag/env de rollout OFF por padrao (ENABLE_*/FEATURE_* = false) e INTENCIONAL (habilitacao coordenada por ambiente); NAO reporte "nao habilitado por padrao" como defeito.',
     '',
     // Recall: a calibracao anti-falso-positivo acima NAO pode virar timidez. Ausencias
     // OBVIAS e graves nao sao "duvida" — sao P0/P1 certos e devem ser reportadas. E um

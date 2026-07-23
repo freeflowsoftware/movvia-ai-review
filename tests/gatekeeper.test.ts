@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, buildRefuteUserPrompt, buildRefuter, capProcessGateSeverity, type Refuter } from '../lib/gatekeeper.js';
+import { findingId, dedupe, dedupeByLine, decideVerdict, filterByCite, runAdversarial, readAdversarialThreshold, consolidateFindings, buildRefuteUserPrompt, buildRefuter, capProcessGateSeverity, refuteByPresence, type Refuter } from '../lib/gatekeeper.js';
 import type { ChatRunner } from '../lib/run-agent.js';
 import type { Finding } from '../lib/types.js';
 
@@ -364,6 +364,15 @@ describe('decideVerdict', () => {
   it('APPROVE/success quando nao ha findings', () => {
     expect(decideVerdict([])).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
   });
+  // Fail-closed (ACID): uma dimensao degradada (timeout) NAO pode virar "verde limpo" — o
+  // estado que o gate le (conclusion) tem de ser bloqueante, nao so uma nota textual.
+  it('REQUEST_CHANGES/failure quando ha dimensao degradada, mesmo sem findings bloqueantes', () => {
+    const v = decideVerdict([f({ severity: 'P2' })], ['regressao']);
+    expect(v).toMatchObject({ event: 'REQUEST_CHANGES', conclusion: 'failure' });
+  });
+  it('degraded vazio nao altera o veredito (retrocompat)', () => {
+    expect(decideVerdict([f({ severity: 'P2' })], [])).toMatchObject({ event: 'APPROVE', conclusion: 'success' });
+  });
 });
 
 describe('capProcessGateSeverity', () => {
@@ -376,5 +385,123 @@ describe('capProcessGateSeverity', () => {
     const out = capProcessGateSeverity([f({ agent: 'requisitos', severity: 'P1' }), f({ agent: 'adr-guardian', severity: 'P2' })]);
     expect(out[0]!.severity).toBe('P1'); // requisitos NAO e capado
     expect(out[1]!.severity).toBe('P2');
+  });
+});
+
+describe('refuteByPresence (guard determinístico, sem LLM)', () => {
+  const index = {
+    symbols: ['ConsultaAlertaEmail', 'RvHero', 'LockService'],
+    testSubjects: ['useIsAndroid'],
+    envKeys: ['ENABLE_CONSULTA_ALERTA_REMINDERS'],
+  };
+
+  it('suprime P0 "model X ausente" quando o model existe no repo (SEO-42/PR640)', () => {
+    const finding = f({
+      severity: 'P0', file: 'src/consulta-alerta.service.ts',
+      title: 'Model Prisma consultaAlertaEmail ausente no schema',
+      rationale: 'O model `ConsultaAlertaEmail` nao existe no schema.prisma — quebra de compilacao.',
+    });
+    const { kept, suppressed } = refuteByPresence([finding], index);
+    expect(kept).toEqual([]);
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0]!.reason).toContain('ConsultaAlertaEmail');
+  });
+
+  it('suprime "sem testes" quando o teste co-locado existe (PR763)', () => {
+    const finding = f({
+      severity: 'P2', category: 'test-coverage', file: 'apps/pe-portal/hooks/useIsAndroid.ts',
+      title: 'Hook useIsAndroid nao possui testes unitarios',
+      rationale: 'Adicionar testes para o hook useIsAndroid.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([]);
+  });
+
+  it('suprime "flag ausente no .env.example" quando a chave existe (PR69-FP3)', () => {
+    const finding = f({
+      severity: 'P2', file: 'src/config/rabbitmq.setup.ts',
+      title: 'Flag ENABLE_CONSULTA_ALERTA_REMINDERS nao esta no .env.example',
+      rationale: 'A variavel ENABLE_CONSULTA_ALERTA_REMINDERS nao esta documentada no .env.example.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([]);
+  });
+
+  it('suprime "componente nao implementado" (existência estrita) quando o componente existe', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/_rota-verde/rota-verde-detalhe.tsx',
+      title: 'Componente RvHero nao esta implementado',
+      rationale: 'O componente `RvHero` nao foi encontrado.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([]);
+  });
+
+  // Regressão SEO-153 / gap apontado no review manual: um componente PODE existir no repo
+  // e ainda assim não ser renderizado no fluxo citado. Isso é AUSÊNCIA COMPORTAMENTAL — não
+  // pode ser suprimida por presença global do símbolo. Antes o padrão "renderizad" caía em
+  // EXISTENCE_ABSENCE e o guard suprimia esse tipo de finding indevidamente.
+  it('PRESERVA "componente X nao e renderizado" mesmo com o simbolo no indice (comportamental)', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/_rota-verde/rota-verde-detalhe.tsx',
+      title: 'Hero RvHero nao e renderizado na pagina',
+      rationale: 'O componente `RvHero` existe mas nao e renderizado no fluxo de detalhe.',
+    });
+    const { kept, suppressed } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it('PRESERVA "does not render" (EN) mesmo com o simbolo no indice (comportamental)', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/page.tsx',
+      title: 'Page does not render RvHero',
+      rationale: 'Layout does not render `RvHero` — component defined but never mounted.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+  });
+
+  // Regressao adversarial: reproduz o texto SEO-153 original combinado. Existe uma claim
+  // de existencia ("nao foi encontrado" bate EXISTENCE_ABSENCE) E uma claim comportamental
+  // ("nao e renderizado", sem acento como PT-BR de LLM sem locale). O guard checa
+  // BEHAVIORAL primeiro; se a regex nao aceitar "e" desacentuado, o texto cai em
+  // EXISTENCE_ABSENCE e RvHero (no indice) suprime o finding indevidamente.
+  it('PRESERVA texto combinado "nao foi encontrado / nao e renderizado" (sem acento, SEO-153 real)', () => {
+    const finding = f({
+      severity: 'P1', file: 'app/_rota-verde/rota-verde-detalhe.tsx',
+      title: 'Componente RvHero nao esta implementado no fluxo',
+      rationale: 'O componente `RvHero` nao foi encontrado / nao e renderizado no template de detalhe.',
+    });
+    const { kept, suppressed } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it('PRESERVA ausencia comportamental P0 mesmo com o simbolo no indice (recall)', () => {
+    // "nao usa LockService" e ausencia de COMPORTAMENTO; LockService existe no repo. NAO suprimir.
+    const finding = f({
+      severity: 'P0', category: 'lock', file: 'src/saldo.service.ts',
+      title: 'Operacao de saldo sem lock distribuido',
+      rationale: 'O read-modify-write de saldo nao usa LockService — race financeira.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+  });
+
+  it('PRESERVA ausencia de existencia REAL quando o simbolo NAO esta no indice', () => {
+    const finding = f({
+      severity: 'P0', title: 'Model Prisma Fantasma ausente no schema',
+      rationale: 'O model `Fantasma` nao existe no schema.prisma.',
+    });
+    const { kept } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+  });
+
+  it('deixa passar findings que nao sao alegacao de ausencia', () => {
+    const finding = f({ title: 'N+1 query no loop', rationale: 'findMany dentro do for.' });
+    const { kept, suppressed } = refuteByPresence([finding], index);
+    expect(kept).toEqual([finding]);
+    expect(suppressed).toEqual([]);
   });
 });

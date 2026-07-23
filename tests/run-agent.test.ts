@@ -1,6 +1,6 @@
 // tests/run-agent.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseFindings, runAgent, llmTimeoutMs, realChatRunner, type ChatRunner } from '../lib/run-agent.js';
+import { parseFindings, runAgent, runAgentSafe, llmTimeoutMs, realChatRunner, LlmError, type ChatRunner } from '../lib/run-agent.js';
 import type { AgentSpec } from '../lib/types.js';
 
 const SPEC: AgentSpec = {
@@ -93,11 +93,20 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
   const origFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = origFetch; });
 
-  it('traduz TimeoutError/AbortError em mensagem legível com o timeout', async () => {
+  it('traduz TimeoutError/AbortError em LlmError transient com mensagem legível', async () => {
     globalThis.fetch = (async () => {
       throw Object.assign(new Error('aborted'), { name: 'TimeoutError' });
     }) as typeof fetch;
+    // PED-2729: timeout vira LlmError com transient=true (classificado pra retry por isTransientLlmError).
     await expect(realChatRunner('m', 's', 'u')).rejects.toThrow(/timeout apos \d+ms/);
+    // Segundo throw pra validar o tipo (rejects.toThrow acima ja consumiu a promise).
+    globalThis.fetch = (async () => {
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    }) as typeof fetch;
+    let captured: unknown;
+    try { await realChatRunner('m', 's', 'u'); } catch (e) { captured = e; }
+    expect(captured).toBeInstanceOf(LlmError);
+    expect((captured as LlmError).transient).toBe(true);
   });
 
   it('propaga erro não-timeout intacto (não mascara como timeout)', async () => {
@@ -114,5 +123,23 @@ describe('realChatRunner (borda LLM: erros e timeout)', () => {
     const body = JSON.stringify({ choices: [{ message: { content: 'olá do modelo' } }] });
     globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
     await expect(realChatRunner('m', 's', 'u')).resolves.toBe('olá do modelo');
+  });
+});
+
+// Classificação de erro transitório e retry com backoff moraram em `isTransientLlmError`/
+// `withRetry` (PED-2729) na main — cobertura em tests/retry-runner.test.ts. O que era do
+// meu `isTimeoutError`/`retryOnTimeout` ficou subsumido e foi removido.
+
+describe('runAgentSafe', () => {
+  it('delega ao runAgent no caminho feliz', async () => {
+    const runner: ChatRunner = async () => '{"agent":"seguranca","findings":[]}';
+    const res = await runAgentSafe(SPEC, 'sys', 'usr', 'm', runner);
+    expect(res.agent).toBe('seguranca');
+    expect(res.degraded).toBeUndefined();
+  });
+  it('degrada (findings vazio + degraded) quando o runner falha — nao derruba o job', async () => {
+    const runner: ChatRunner = async () => { throw new Error('chat-completion timeout apos 60000ms'); };
+    const res = await runAgentSafe(SPEC, 'sys', 'usr', 'm', runner);
+    expect(res).toEqual({ agent: 'seguranca', findings: [], degraded: true });
   });
 });

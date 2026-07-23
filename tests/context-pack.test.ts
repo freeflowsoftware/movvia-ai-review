@@ -12,6 +12,8 @@ import {
   estimateTokens,
   enforceTokenBudget,
   composedSuffix,
+  buildPresenceIndex,
+  EMPTY_PRESENCE_INDEX,
   nodeFileSystemReader,
   type FileSystemReader,
   type ContextPackOpts,
@@ -230,6 +232,7 @@ describe('enforceTokenBudget', () => {
           exemplars: [pf('e.ts', big)],
         },
       ],
+      presenceIndex: EMPTY_PRESENCE_INDEX,
     };
     // budget so cabe o alterado + 1 camada extra
     const out = enforceTokenBudget(pack, 120);
@@ -250,6 +253,7 @@ describe('enforceTokenBudget', () => {
           exemplars: [pf('e.ts', 'dd')],
         },
       ],
+      presenceIndex: EMPTY_PRESENCE_INDEX,
     };
     const out = enforceTokenBudget(pack, 100_000);
     const f = out.files[0]!;
@@ -346,5 +350,110 @@ describe('buildContextPack — degradacao graciosa por camada (fake que lanca)',
     expect(f.changed.content).toContain('export class C'); // camada 1 ok
     expect(f.siblings).toEqual([]); // camada 2 degradou
     expect(f.imports.map((i) => i.path)).toContain('src/dep.ts'); // camada 3 ok (nao usa listDir)
+  });
+});
+
+describe('buildPresenceIndex', () => {
+  it('indexa models Prisma, simbolos declarados, sujeitos de teste e chaves de .env.example', () => {
+    const { dir, write } = makeRepo();
+    // FP SEO-42/PR640: o model existe no schema, fora da janela do context-pack do service.
+    write('prisma/schema.prisma', 'model ConsultaAlertaEmail {\n  id String @id\n}\n');
+    // FP SEO-153: componente que o bot alegou "nao implementado/nao renderizado".
+    write('app/_rota-verde/_components/rv-hero.tsx', 'export function RvHero() {\n  return null;\n}\n');
+    // FP PR763: teste co-locado em __tests__/ que o bot alegou faltar.
+    write('hooks/__tests__/useIsAndroid.test.ts', "import { useIsAndroid } from '../useIsAndroid';\n");
+    // FP PR69-FP3: flag que o bot alegou ausente no .env.example (ela esta la).
+    write('.env.example', 'DATABASE_URL=postgres://x\nENABLE_CONSULTA_ALERTA_REMINDERS=false\n');
+
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+
+    expect(index.symbols).toContain('ConsultaAlertaEmail');
+    expect(index.symbols).toContain('RvHero');
+    expect(index.testSubjects).toContain('useIsAndroid');
+    expect(index.envKeys).toContain('ENABLE_CONSULTA_ALERTA_REMINDERS');
+  });
+
+  it('F2: indexa const/component de topo (export) mas NAO variavel local de funcao', () => {
+    const { dir, write } = makeRepo();
+    write('app/rv-hero.tsx', 'export const RvHero = () => null;\nfunction x() {\n  const localSecreto = 1;\n  return localSecreto;\n}\n');
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    expect(index.symbols).toContain('RvHero');
+    expect(index.symbols).not.toContain('localSecreto'); // binding local nao infla o indice
+  });
+
+  it('F1: ignora arquivos fora da allowlist de extensao (lockfile/asset nao sao lidos p/ simbolo)', () => {
+    const { dir, write } = makeRepo();
+    write('src/comp.tsx', 'export class RealComp {}');
+    write('pnpm-lock.yaml', 'packages:\n  class FakeFromLock:\n');
+    write('public/data.json', '{"class": "FakeFromJson"}');
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    expect(index.symbols).toContain('RealComp');
+    expect(index.symbols).not.toContain('FakeFromLock');
+    expect(index.symbols).not.toContain('FakeFromJson');
+  });
+
+  it('F1: pula arquivo fonte gigante (acima do cap) sem quebrar o indice', () => {
+    const { dir, write } = makeRepo();
+    write('src/ok.ts', 'export class Pequena {}');
+    write('src/gigante.ts', `export class Gigante {}\n${'// x'.repeat(200_000)}`);
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    expect(index.symbols).toContain('Pequena');
+    expect(index.symbols).not.toContain('Gigante'); // gigante pulado pelo cap de tamanho
+  });
+
+  it('degrada gracioso: fs que lanca no walk devolve indice vazio (nunca quebra o pack)', () => {
+    const listDirFails: FileSystemReader = {
+      ...nodeFileSystemReader,
+      listDir: () => {
+        throw new Error('listDir boom');
+      },
+    };
+    const index = buildPresenceIndex('/qualquer', listDirFails);
+    expect(index).toEqual({ symbols: [], testSubjects: [], envKeys: [] });
+  });
+
+  // Regressao: sem sort, a ordem herda de listDir/walkRepo (nao garantida pelo POSIX). Isso
+  // fazia o context-pack.json diferir entre runs equivalentes em FS/hosts diferentes.
+  it('DETERMINISMO: symbols/testSubjects/envKeys sao ordenados alfabeticamente na saida', () => {
+    const { dir, write } = makeRepo();
+    write('src/z-comp.ts', 'export class Zebra {}');
+    write('src/a-comp.ts', 'export class Alfa {}');
+    write('src/m-comp.ts', 'export class Meio {}');
+    write('hooks/__tests__/zeta.test.ts', "import { zeta } from '../zeta';\n");
+    write('hooks/__tests__/alpha.test.ts', "import { alpha } from '../alpha';\n");
+    write('.env.example', 'ZED=1\nALPHA=1\nMID=1\n');
+
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+
+    const codeSymbols = index.symbols.filter((s) => ['Alfa', 'Meio', 'Zebra'].includes(s));
+    expect(codeSymbols).toEqual(['Alfa', 'Meio', 'Zebra']);
+    expect(index.testSubjects).toEqual([...index.testSubjects].sort());
+    expect(index.envKeys).toEqual(['ALPHA', 'MID', 'ZED']);
+  });
+
+  // Regressao (P0 v3): NAMED_BINDING_REGEX usava \s* guloso que cruza \n. Arquivo com
+  // muitas linhas em branco sem `export const/let/var` disparava backtracking catastrofico
+  // (>60s em 262KB). Fix: \s* -> [ \t]*.
+  it('DoS FIX: arquivo com muitas linhas em branco NAO trava NAMED_BINDING_REGEX (era >60s)', () => {
+    const { dir, write } = makeRepo();
+    const adversarial = 'export class Real {}\n' + '\n'.repeat(200_000);
+    write('src/real.ts', adversarial);
+    const t0 = performance.now();
+    const index = buildPresenceIndex(dir, nodeFileSystemReader);
+    const elapsed = performance.now() - t0;
+    expect(index.symbols).toContain('Real');
+    // Era >60s com \s*; com [ \t]* fica <100ms mesmo em CI lento.
+    expect(elapsed).toBeLessThan(500);
+  });
+});
+
+describe('buildContextPack presenceIndex', () => {
+  it('anexa o presenceIndex do repo inteiro (independe dos arquivos alterados)', () => {
+    const { dir, write } = makeRepo();
+    write('prisma/schema.prisma', 'model ConsultaAlertaEmail {\n  id String @id\n}\n');
+    write('src/consulta-alerta.service.ts', 'export class ConsultaAlertaService {}');
+
+    const pack = buildContextPack(dir, ['src/consulta-alerta.service.ts'], OPTS);
+    expect(pack.presenceIndex.symbols).toContain('ConsultaAlertaEmail');
   });
 });
