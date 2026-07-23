@@ -29,6 +29,16 @@ judge:
   max_replies: 3
   debounce_seconds: 90
   bot_login: "movvia-ai-review[bot]"
+# dismiss.*: dispensa MANUAL de finding por comando (PED-2728, lib/dismiss.ts).
+# min_motivo_len = comprimento minimo do motivo obrigatorio; feedback_repo = repo onde
+# a issue de calibracao e aberta; feedback_model = modelo que redige a analise (best-effort).
+# allow_p0_by_codeowner: GATE de politica de merge (ADR-002). Enquanto o ADR-002 estiver
+# em Proposta, MANTER false — P0 permanece inviolavel. So vai a true com o ADR Aceito.
+dismiss:
+  allow_p0_by_codeowner: false
+  min_motivo_len: 15
+  feedback_repo: "freeflowsoftware/movvia-ai-review"
+  feedback_model: "deepseek/deepseek-v4-flash"
 # context_pack.*: cotas do context-pack deterministico (lib/context-pack.ts), lidas pelo
 # context-pack-cli. max_tokens e o cap rigido do pack inteiro (corte por prioridade
 # alterado>irmaos>imports>exemplos); skeleton_loc_threshold skeletoniza arquivos grandes

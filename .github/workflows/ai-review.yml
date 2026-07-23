@@ -5,8 +5,10 @@ on:
       pr_number:   { type: number, required: true }
       agents_dir:  { type: string, default: "agents" }
       full_review: { type: boolean, default: false }
-      # event = 'pull_request' (pipeline completo) | 'review_comment' (judge-pushback).
-      # comment_id so e usado quando event='review_comment' (o id do comentario do dev).
+      # event = 'pull_request' (pipeline completo) | 'review_comment' (judge-pushback) |
+      # 'dismiss' (PED-2728: roda o pipeline completo E aplica /ai-review dismiss no job post
+      # ANTES do post.ts, que rele o store e recomputa o verdict). comment_id e usado quando
+      # event='review_comment' (id do reply do dev) ou event='dismiss' (id do comando).
       event:       { type: string, default: "pull_request" }
       comment_id:  { type: string, required: false }
     secrets:
@@ -400,6 +402,34 @@ jobs:
       - run: pnpm install --prefer-offline
       - uses: actions/download-artifact@v4
         with: { name: verdict, path: /tmp }
+      # PED-2728: quando o gatilho e o comando /ai-review dismiss, aplica-o ANTES do post.ts
+      # (mesmo job = sequencial, sem corrida no read-modify-write do store). lib/dismiss.ts
+      # grava o Withdrawal e o post.ts seguinte rele o store, suprime e recomputa o verdict,
+      # re-emitindo review-bot/verdict. So roda no event=dismiss.
+      # CUSTO (trade-off consciente): event=dismiss re-roda o pipeline INTEIRO (agentes LLM)
+      # so para recomputar o verdict, pois o post.ts precisa de um verdict.json fresco. Aceito
+      # no v1 (dismiss e raro/humano); otimizacao futura = reusar o verdict.json do run anterior
+      # (ver docs/superpowers/plans/2026-07-22-...). REVISAR-ACID: o dismiss e one-shot; se o run
+      # ficar PENDENTE no concurrency group e for superado, o GitHub o cancela e o comando se
+      # perde sem feedback. Mitigacao atual: o comando e IDEMPOTENTE — basta re-comentar. Fila de
+      # replay de comandos nao-aplicados fica como follow-up.
+      - name: Aplicar dismiss (event=dismiss)
+        if: inputs.event == 'dismiss'
+        env:
+          REVIEW_APP_ID: ${{ secrets.REVIEW_APP_ID }}
+          REVIEW_APP_PRIVATE_KEY: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
+          REVIEW_INSTALLATION_ID: ${{ secrets.REVIEW_INSTALLATION_ID }}
+          REVIEW_PAT: ${{ secrets.REVIEW_PAT }}
+          AI_REVIEW_REPO_TOKEN: ${{ secrets.AI_REVIEW_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          COMMENT_ID: ${{ inputs.comment_id }}
+          GH_REPO: ${{ github.repository }}
+          # A issue de feedback e a analise do LLM (best-effort) usam o mesmo endpoint LLM.
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
+          FEEDBACK_MODEL: deepseek/deepseek-v4-flash
+        run: npx tsx lib/dismiss.ts
       - name: Postar review + check run
         env:
           REVIEW_APP_ID: ${{ secrets.REVIEW_APP_ID }}

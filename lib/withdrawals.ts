@@ -21,6 +21,12 @@ export interface Withdrawal {
   acceptedBy: string;
   category: string;
   file: string;
+  /**
+   * Argumento textual da dispensa manual por comando (`/ai-review dismiss ... <motivo>`,
+   * PED-2728). Opcional: o judge-pushback grava sem motivo (a evidência é a reply na
+   * thread). Entradas antigas sem o campo continuam válidas (parse tolerante).
+   */
+  motivo?: string;
 }
 
 export const withdrawalsMarker = '<!-- movvia-ai-review:withdrawals -->';
@@ -49,15 +55,31 @@ export function buildWithdrawalsComment(withdrawals: Withdrawal[]): string {
   return [withdrawalsMarker, '```json', JSON.stringify({ withdrawals }), '```'].join('\n');
 }
 
+/** Casa por findingId exato: atualiza a entry existente em vez de empilhar duplicata. */
+function upsertByFindingId(list: Withdrawal[], entry: Withdrawal): Withdrawal[] {
+  const semDuplicata = list.filter((w) => w.findingId !== entry.findingId);
+  return [...semDuplicata, entry];
+}
+
 /**
- * Upsert por findingId (atualiza acceptedSha/acceptedAt em vez de empilhar duplicata).
- * REJEITA severity P0: o store NUNCA contém P0 — um P0 jamais é suprimido por argumento
- * textual (decisão Pablo). Guarda inviolável: mesmo que o judge erre, P0 não entra aqui.
+ * Upsert do JUDGE-PUSHBACK: REJEITA severity P0 incondicionalmente — o store nunca contém
+ * P0 por argumento textual (decisão Pablo). Guarda inviolável: mesmo que o judge erre, P0
+ * não entra por aqui. A única porta de P0 é upsertDismissal (comando explícito de CODEOWNER).
  */
 export function upsertWithdrawal(list: Withdrawal[], entry: Withdrawal): Withdrawal[] {
   if (entry.severity === 'P0') return list;
-  const semDuplicata = list.filter((w) => w.findingId !== entry.findingId);
-  return [...semDuplicata, entry];
+  return upsertByFindingId(list, entry);
+}
+
+/**
+ * Upsert da DISPENSA MANUAL por comando (PED-2728, ADR-002). Aceita P0 SOMENTE quando
+ * `allowP0` é true — no CLI isso exige, cumulativamente: autor CODEOWNER do arquivo, flag
+ * `dismiss.allow_p0_by_codeowner` ligada e ADR-002 Aceito. Fora disso, P0 é rejeitado
+ * (comportamento idêntico ao judge). P1/P2 sempre entram.
+ */
+export function upsertDismissal(list: Withdrawal[], entry: Withdrawal, allowP0: boolean): Withdrawal[] {
+  if (entry.severity === 'P0' && !allowP0) return list;
+  return upsertByFindingId(list, entry);
 }
 
 /**
