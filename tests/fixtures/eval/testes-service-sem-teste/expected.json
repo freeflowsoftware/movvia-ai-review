@@ -1,0 +1,9 @@
+{
+  "agent": "testes",
+  "positive": true,
+  "threshold": 1,
+  "expected": [
+    { "file": "src/recarga/recarga.service.ts" }
+  ],
+  "note": "Nova funcao com ramos de negocio (calculo de taxa) adicionada sem teste correspondente no PR."
+}

@@ -1,0 +1,14 @@
+diff --git a/src/recarga/recarga.service.ts b/src/recarga/recarga.service.ts
+index 9999999..aaaaaaa 100644
+--- a/src/recarga/recarga.service.ts
++++ b/src/recarga/recarga.service.ts
+@@ -5,6 +5,15 @@ export class RecargaService {
+   constructor(private readonly prisma: PrismaService) {}
+
++  calcularTaxa(valor: number, tipo: string): number {
++    if (tipo === 'PIX') return valor * 0.01;
++    if (tipo === 'CARTAO_CREDITO') return valor * 0.035;
++    if (tipo === 'BOLETO') return 2.5;
++    return 0;
++  }
+ }

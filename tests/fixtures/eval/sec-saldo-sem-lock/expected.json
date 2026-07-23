@@ -1,0 +1,9 @@
+{
+  "agent": "seguranca",
+  "positive": true,
+  "threshold": 1,
+  "expected": [
+    { "file": "src/carteira/debito.service.ts", "severity": "P0" }
+  ],
+  "note": "Operacao financeira (debito de saldo) sem LockService: read-modify-write com race condition."
+}

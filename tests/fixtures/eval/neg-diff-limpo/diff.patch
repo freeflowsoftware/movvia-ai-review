@@ -1,0 +1,10 @@
+diff --git a/src/comum/formatadores.ts b/src/comum/formatadores.ts
+index ccccccc..ddddddd 100644
+--- a/src/comum/formatadores.ts
++++ b/src/comum/formatadores.ts
+@@ -3,7 +3,8 @@
+ export function formatarPlaca(placa: string): string {
+-  return placa.toUpperCase();
++  // Normaliza a placa para maiuscula (formato Mercosul)
++  return placa.trim().toUpperCase();
+ }

@@ -1,0 +1,56 @@
+name: prompt-eval
+# Esteira de eval de prompts (PED-2730). O job SEMPRE roda para poder ser required check
+# sem travar PRs (path filter em required check causa deadlock — cf. GH013). Um step detecta
+# se algum arquivo que compoe o prompt mudou; so entao roda o eval (que consome LLM).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detectar mudanca de prompt
+        id: detect
+        run: |
+          BASE="origin/${{ github.base_ref }}"
+          CHANGED="$(git diff --name-only "$BASE"...HEAD)"
+          echo "Arquivos alterados:"; echo "$CHANGED"
+          if echo "$CHANGED" | grep -Eq '^(agents/|org-rules/|lang-packs/|config/defaults\.yml|promptfooconfig\.yaml|evals/|tests/fixtures/eval/|lib/(context-loader|agent-runner-cli|run-agent|discover|org-rules|adr|jira|context-pack)\.ts)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nenhuma mudanca de prompt; eval sera pulado (check verde)."
+          fi
+      - uses: pnpm/action-setup@v4
+        if: steps.detect.outputs.changed == 'true'
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Instalar deps
+        if: steps.detect.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Cache promptfoo
+        if: steps.detect.outputs.changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.promptfoo/cache
+          key: promptfoo-${{ hashFiles('agents/**', 'org-rules/**', 'lang-packs/**', 'lib/context-loader.ts', 'lib/agent-runner-cli.ts', 'lib/run-agent.ts', 'lib/discover.ts', 'config/defaults.yml', 'promptfooconfig.yaml', 'evals/**', 'tests/fixtures/eval/**') }}
+          restore-keys: |
+            promptfoo-
+      - name: Eval de prompts
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+        run: pnpm eval:ci

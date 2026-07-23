@@ -1,0 +1,6 @@
+{
+  "agent": "testes",
+  "positive": false,
+  "expected": [],
+  "note": "Anti-FP: a funcao nova ja vem com teste no mesmo PR. O agente de testes nao deve reclamar."
+}

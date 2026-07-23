@@ -14,6 +14,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const yamlFiles = [
   '.github/workflows/ai-review.yml',
   '.github/workflows/self-test.yml',
+  '.github/workflows/prompt-eval.yml',
   '.github/caller-template.yml',
   'config/defaults.yml',
 ];

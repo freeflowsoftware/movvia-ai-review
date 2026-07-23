@@ -1,0 +1,16 @@
+diff --git a/src/pedidos/pedidos.service.ts b/src/pedidos/pedidos.service.ts
+index 1111111..2222222 100644
+--- a/src/pedidos/pedidos.service.ts
++++ b/src/pedidos/pedidos.service.ts
+@@ -8,6 +8,14 @@ export class PedidosService {
+   constructor(private readonly prisma: PrismaService) {}
+
++  async listarComItens(pedidoIds: number[]) {
++    const resultado = [];
++    for (const id of pedidoIds) {
++      const itens = await this.prisma.item.findMany({ where: { pedidoId: id } });
++      resultado.push({ id, itens });
++    }
++    return resultado;
++  }
+ }

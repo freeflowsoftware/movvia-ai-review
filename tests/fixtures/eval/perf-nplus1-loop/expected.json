@@ -1,0 +1,9 @@
+{
+  "agent": "performance",
+  "positive": true,
+  "threshold": 1,
+  "expected": [
+    { "file": "src/pedidos/pedidos.service.ts" }
+  ],
+  "note": "N+1: findMany dentro de for sobre pedidoIds; deveria ser uma query com where IN."
+}

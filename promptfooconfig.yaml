@@ -1,0 +1,27 @@
+# Esteira de eval de prompts do movvia-ai-review (PED-2730).
+# Roda cada persona (agents/*.md) pelo CLI real de review sobre diffs rotulados e afere
+# recall (casos positivos) e precisao (casos negativos) + "faz sentido" (llm-rubric). Bloqueia o CI abaixo do limiar.
+# Rodar: pnpm eval   (exige LLM_BASE_URL / LLM_API_KEY no ambiente)
+description: Eval de qualidade das personas de review (movvia-ai-review)
+
+# Template so para variar a chave de cache por caso; o provider usa context.vars, nao o texto.
+prompts:
+  - 'eval:{{agent}}:{{diffPath}}'
+
+providers:
+  - id: file://evals/provider.mjs
+    label: agent-runner
+
+# Grader do llm-rubric: usa o mesmo endpoint OpenAI-compat configurado (LLM_BASE_URL) e a
+# chave em LLM_API_KEY. deepseek/deepseek-v4-flash raciocina melhor que o Flash-Lite.
+defaultTest:
+  options:
+    provider:
+      id: openai:chat:deepseek/deepseek-v4-flash
+      config:
+        apiBaseUrl: '{{ env.LLM_BASE_URL }}'
+        apiKeyEnvar: LLM_API_KEY
+        temperature: 0
+
+# Um teste por pasta em tests/fixtures/eval/ (ver evals/tests.mjs).
+tests: file://evals/tests.mjs

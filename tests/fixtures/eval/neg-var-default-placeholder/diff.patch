@@ -1,0 +1,11 @@
+diff --git a/src/config/database.config.ts b/src/config/database.config.ts
+index eeeeeee..fffffff 100644
+--- a/src/config/database.config.ts
++++ b/src/config/database.config.ts
+@@ -1,6 +1,9 @@
+ export const databaseConfig = {
+   host: process.env.DATABASE_HOST ?? 'localhost',
++  // fallback de desenvolvimento local — placeholder, nao e segredo de producao
++  password: process.env.DATABASE_PASSWORD ?? 'postgres',
++  username: process.env.DATABASE_USERNAME ?? 'postgres',
+ };

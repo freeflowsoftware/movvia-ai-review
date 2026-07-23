@@ -1,0 +1,6 @@
+{
+  "agent": "seguranca",
+  "positive": false,
+  "expected": [],
+  "note": "Anti-FP: fallback de dev em placeholder (postgres) nao e credencial hardcoded de producao. Deve retornar []."
+}
