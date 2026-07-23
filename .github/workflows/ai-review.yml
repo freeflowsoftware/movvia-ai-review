@@ -367,11 +367,13 @@ jobs:
           # exportamos LLM_API_KEY/LLM_BASE_URL aqui.
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai' }}
-          # DEDUP_MODEL: modelo melhor para a consolidacao semantica final (consolidateFindings
-          # em lib/gatekeeper.ts). Sobrescreve o default deepseek/deepseek-v4-flash do codigo.
+          # DEDUP_MODEL: modelo da consolidacao semantica final (consolidateFindings).
+          # REFUTER_MODEL: modelo do refuter adversarial, fixado explicitamente (nao por
+          # fallback) para nunca cair no Flash-Lite — o avaliador do PR #475 mostrou que o
+          # refuter em Flash-Lite nao barrava falsos-positivos. Ambos em deepseek-v4-flash
+          # (raciocinio); manter separados permite ajustar um sem afetar o outro.
           DEDUP_MODEL: deepseek/deepseek-v4-flash
-          # Sem DEFAULT_MODEL: o refuter adversarial volta ao Flash-Lite (rapido). Era o
-          # gargalo de tempo (gatekeeper 188s) quando o refuter rodava em DeepSeek por finding.
+          REFUTER_MODEL: deepseek/deepseek-v4-flash
         run: npx tsx lib/gatekeeper.ts /tmp/findings /tmp/pr.diff /tmp/context-pack/context-pack.json > /tmp/verdict.json
       - uses: actions/upload-artifact@v4
         with: { name: verdict, path: /tmp/verdict.json }

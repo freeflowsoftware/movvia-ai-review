@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAddedLines, parseCite, isCiteValid } from '../lib/cite-the-line.js';
+import { parseAddedLines, parseCite, isCiteValid, diffForFile, indexDiffByFile } from '../lib/cite-the-line.js';
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
 --- a/src/a.ts
@@ -12,6 +12,21 @@ const DIFF = `diff --git a/src/a.ts b/src/a.ts
 @@ -40,2 +42,2 @@
 -velho
 +novo
+`;
+
+// Diff com DOIS arquivos: diffForFile deve isolar os hunks de cada um, sem vazar o outro.
+const DIFF_DOIS_ARQUIVOS = `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,1 +1,1 @@
+-Em breve disponivel na:
++Disponivel em:
+diff --git a/src/b.ts b/src/b.ts
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -5,1 +5,1 @@
+-antigo
++atual
 `;
 
 // Conteudo adicionado que comeca com ++/--. O git emite headers como "+++ b/path"
@@ -37,6 +52,17 @@ describe('parseAddedLines', () => {
   });
 });
 
+// Regressao (CodeRabbit PR#13): uma remocao "-- x" e serializada como "--- x" e uma adicao
+// "++ b/y" como "+++ b/y". DENTRO do hunk sao conteudo real e nao podem ser descartados como
+// header, senao o arbitro perde justamente o delta que precisa ver.
+const DIFF_CONTEUDO_PARECE_HEADER = `diff --git a/src/d.ts b/src/d.ts
+--- a/src/d.ts
++++ b/src/d.ts
+@@ -1,2 +1,2 @@
+--- rodape antigo
++++ b/rodape novo
+`;
+
 describe('parseCite', () => {
   it('parseia "file:start-end"', () => {
     expect(parseCite('src/a.ts:11-12')).toEqual({ file: 'src/a.ts', start: 11, end: 12 });
@@ -61,5 +87,55 @@ describe('isCiteValid', () => {
   it('false quando o arquivo nao esta no diff', () => {
     const map = parseAddedLines(DIFF);
     expect(isCiteValid('src/inexistente.ts:1-2', map)).toBe(false);
+  });
+});
+
+describe('diffForFile', () => {
+  // O arbitro adversarial precisa do DELTA do arquivo (nao so do HEAD do excerpt) para
+  // arbitrar findings que sao afirmacoes sobre o diff (pe-portais#696).
+  it('extrai os hunks (+/-/contexto) do arquivo-alvo', () => {
+    const out = diffForFile(DIFF, 'src/a.ts');
+    expect(out).toContain('+const token = "abc";');
+    expect(out).toContain('+novo');
+    expect(out).toContain('@@ -10,3 +10,5 @@ class A {');
+  });
+
+  it('isola um arquivo sem vazar os hunks de outro arquivo do mesmo diff', () => {
+    const out = diffForFile(DIFF_DOIS_ARQUIVOS, 'src/a.ts');
+    expect(out).toContain('+Disponivel em:');
+    expect(out).toContain('-Em breve disponivel na:');
+    expect(out).not.toContain('atual'); // hunk de src/b.ts nao vaza
+  });
+
+  it('exclui os cabecalhos de arquivo (diff --git / --- / +++) do conteudo', () => {
+    const out = diffForFile(DIFF_DOIS_ARQUIVOS, 'src/b.ts');
+    expect(out).not.toContain('diff --git');
+    expect(out).not.toContain('--- a/');
+    expect(out).not.toContain('+++ b/');
+    expect(out).toContain('+atual');
+  });
+
+  it('retorna vazio quando o arquivo nao esta no diff', () => {
+    expect(diffForFile(DIFF, 'src/inexistente.ts')).toBe('');
+  });
+
+  it('preserva conteudo do hunk que parece header ("--- x" removido, "+++ b/y" adicionado)', () => {
+    const out = diffForFile(DIFF_CONTEUDO_PARECE_HEADER, 'src/d.ts');
+    expect(out).toContain('--- rodape antigo'); // remocao "-- rodape antigo" nao vira header
+    expect(out).toContain('+++ b/rodape novo'); // adicao "++ b/rodape novo" nao vira header
+  });
+});
+
+describe('indexDiffByFile', () => {
+  // Indexa numa unica passada para o gatekeeper consultar O(1) por finding (sem re-parse).
+  it('mapeia cada arquivo aos seus hunks numa unica passada', () => {
+    const idx = indexDiffByFile(DIFF_DOIS_ARQUIVOS);
+    expect([...idx.keys()].sort()).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(idx.get('src/a.ts')).toContain('+Disponivel em:');
+    expect(idx.get('src/b.ts')).toContain('+atual');
+    expect(idx.get('src/a.ts')).not.toContain('atual'); // sem vazamento entre arquivos
+  });
+  it('concorda com diffForFile (que delega ao indice)', () => {
+    expect(diffForFile(DIFF_DOIS_ARQUIVOS, 'src/b.ts')).toBe(indexDiffByFile(DIFF_DOIS_ARQUIVOS).get('src/b.ts'));
   });
 });
