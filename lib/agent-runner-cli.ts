@@ -8,6 +8,7 @@ import { detectLanguages, buildSystemPrompt, buildUserPrompt, agentMatchesPaths 
 // devolve findings vazio + degraded=true em vez de derrubar a leg da matrix e, via needs:,
 // bloquear gatekeeper/post). Retry primeiro, safe depois — o veredicto sempre e publicado.
 import { runAgentSafe, realChatRunner, withRetry } from './run-agent.js';
+import { stripGeneratedFiles } from './diff-filter.js';
 import { loadOrgRules } from './org-rules.js';
 import { ADR_GLOBS } from './adr.js';
 import { EMPTY_PRESENCE_INDEX } from './context-pack.js';
@@ -146,7 +147,10 @@ if (process.argv[1]?.endsWith('agent-runner-cli.ts')) {
   const [name = '', repoDir = '', diffPath = '', packPath = ''] = process.argv.slice(2);
   const central = join(import.meta.dirname, '..');
   const spec = parseAgentFile(readFileSync(join(central, 'agents', `${name}.md`), 'utf8'), `agents/${name}.md`);
-  const diff = readFileSync(diffPath, 'utf8');
+  // Opcao 1 (PR #863): remove arquivos gerados (lockfiles/build/snapshots) do diff ANTES de
+  // qualquer uso — eles nao sao revisados e inflavam o prompt ate estourar o teto de 1M tokens
+  // do LLM. Filtrar aqui poda tanto o diff embutido no prompt quanto os changedFiles derivados.
+  const diff = stripGeneratedFiles(readFileSync(diffPath, 'utf8'));
   // matchAll devolve grupos string|undefined; o regex casa => m[1] sempre presente.
   const changedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1] ?? '');
   // Roteamento por paths: se o diff nao toca nenhum glob do agente, emite findings vazio

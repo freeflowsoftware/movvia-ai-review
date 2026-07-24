@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Octokit } from '@octokit/rest';
 import { realChatRunner } from './run-agent.js';
+import { stripGeneratedFiles } from './diff-filter.js';
 import {
   generateWalkthrough,
   formatWalkthroughComment,
@@ -81,7 +82,9 @@ if (process.argv[1]?.endsWith('walkthrough-cli.ts')) {
     process.exit(1);
   }
 
-  const diff = readFileSync(diffPath, 'utf8');
+  // Opcao 1 (PR #863): remove arquivos gerados do diff (o walkthrough ja truncava por chars,
+  // mas truncar pega o COMECO — se o lockfile vier primeiro, cegava o resumo do codigo real).
+  const diff = stripGeneratedFiles(readFileSync(diffPath, 'utf8'));
   const contextPack = packPath ? readFileSafe(packPath) : undefined;
   const prTitle = process.env.PR_TITLE;
 
