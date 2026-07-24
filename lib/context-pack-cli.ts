@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { buildContextPack, type ContextPackOpts } from './context-pack.js';
+import { stripGeneratedFiles } from './diff-filter.js';
 
 /** Fallbacks quando config/defaults.yml nao traz o bloco context_pack (mesmos do blueprint). */
 const DEFAULT_OPTS: ContextPackOpts = {
@@ -61,7 +62,9 @@ if (process.argv[1]?.endsWith('context-pack-cli.ts')) {
   // Fallback '' nos argv (mesma convencao de agent-runner-cli/gatekeeper) para satisfazer
   // noUncheckedIndexedAccess do tsconfig — slice() devolve (string|undefined)[].
   const [repoDir = '', diffPath = ''] = process.argv.slice(2);
-  const diff = readFileSync(diffPath, 'utf8');
+  // Opcao 1 (PR #863): filtra arquivos gerados antes de derivar changedFiles — sem isso o
+  // pack leria o pnpm-lock.yaml INTEIRO como arquivo alterado (camada 1 nunca skeletoniza).
+  const diff = stripGeneratedFiles(readFileSync(diffPath, 'utf8'));
   const changedFiles = changedFilesFromDiff(diff);
   const opts = loadContextPackOpts(join(import.meta.dirname, '..', 'config', 'defaults.yml'));
   const pack = buildContextPack(repoDir, changedFiles, opts);
