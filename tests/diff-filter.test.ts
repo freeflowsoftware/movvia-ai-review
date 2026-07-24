@@ -35,19 +35,27 @@ describe('stripGeneratedFiles', () => {
     expect(filtered).toContain('apps/pe-portal/page.tsx');
   });
 
-  it('remove saidas de build e snapshots', () => {
-    const diff =
-      fileBlock('dist/main.js', 'a') +
-      fileBlock('coverage/lcov.info', 'b') +
-      fileBlock('src/__snapshots__/x.test.ts.snap', 'c') +
-      fileBlock('src/real.ts', 'd');
+  it('remove snapshots gerados', () => {
+    const diff = fileBlock('src/__snapshots__/x.test.ts.snap', 'c') + fileBlock('src/real.ts', 'd');
 
     const filtered = stripGeneratedFiles(diff);
 
     expect(filtered).toContain('src/real.ts');
-    expect(filtered).not.toContain('dist/main.js');
-    expect(filtered).not.toContain('coverage/lcov.info');
     expect(filtered).not.toContain('.snap');
+  });
+
+  // Anti-blind-spot (review PR #19): NAO podamos diretorios de build inteiros — descartar por
+  // diretorio deixaria um autor esconder codigo sob dist/build e ele nunca seria revisado.
+  it('preserva codigo sob diretorio de build (dist/) — nao e blind spot', () => {
+    const diff = fileBlock('packages/dist/index.ts', 'const escondido = 1;');
+
+    expect(stripGeneratedFiles(diff)).toContain('packages/dist/index.ts');
+  });
+
+  it('nao confunde arquivo de codigo *.snap.ts com snapshot *.snap', () => {
+    const diff = fileBlock('src/algo.snap.ts', 'x');
+
+    expect(stripGeneratedFiles(diff)).toContain('src/algo.snap.ts');
   });
 
   it('preserva byte a byte um diff sem arquivos gerados', () => {
